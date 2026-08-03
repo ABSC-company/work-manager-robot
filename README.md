@@ -68,7 +68,7 @@ sudo apt install -y docker-compose-plugin git
 
 ```bash
 git clone <your-repo-url> /opt/manager
-cd /opt/manager/service
+cd /opt/manager
 cp .env.example .env
 nano .env   # заполнить TELEGRAM_BOT_TOKEN, TELEGRAM_SUPER_ADMIN_IDS, ANTHROPIC_API_KEY,
             # ENCRYPTION_KEY (32-байтный hex: `openssl rand -hex 32`), POSTGRES_PASSWORD и т.д.
@@ -97,7 +97,7 @@ Workflow уже в репозитории: `.github/workflows/deploy.yml`.
    - `VDS_USER` — ssh-пользователь (например, `deploy`)
    - `VDS_SSH_KEY` — приватный ключ (публичный добавить в `~/.ssh/authorized_keys` на сервере)
    - `VDS_SSH_PASSPHRASE` — passphrase от приватного ключа, если он защищён паролем (workflow передаёт его в `appleboy/ssh-action` полем `passphrase`, ключ расшифровывается неинтерактивно на лету). Если ключ без passphrase — секрет не создавать, `appleboy/ssh-action` спокойно работает с пустым значением.
-   - `VDS_DEPLOY_PATH` — путь к репозиторию на сервере, например `/opt/manager`
+   - `VDS_DEPLOY_PATH` — путь к репозиторию на сервере (корень git-клона, например `/opt/manager`)
 2. `GITHUB_TOKEN` для входа в GHCR передаётся автоматически, дополнительно настраивать не нужно.
 3. Убедиться, что пакет образа (`ghcr.io/<owner>/<repo>`) публичный либо что сервер выполняет `docker login ghcr.io` (workflow делает это самостоятельно перед `pull`).
 4. При пуше в `main`: job `build` собирает и типизирует проект, пушит Docker-образ в GHCR с тегами `latest` и `<sha>`; job `deploy` по SSH заходит на VDS, обновляет репозиторий (`git pull`) и перезапускает `docker compose` с новым образом.

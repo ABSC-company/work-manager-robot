@@ -23,15 +23,12 @@ jobs:
           node-version: 20
 
       - name: Install dependencies
-        working-directory: service
         run: npm ci
 
       - name: Type-check
-        working-directory: service
         run: npm run lint
 
       - name: Build
-        working-directory: service
         run: npm run build
 
       - name: Log in to GHCR
@@ -44,7 +41,7 @@ jobs:
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:
-          context: service
+          context: .
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
 
@@ -60,13 +57,13 @@ jobs:
           key: ${{ secrets.VDS_SSH_KEY }}
           passphrase: ${{ secrets.VDS_SSH_PASSPHRASE }}
           # VDS_DEPLOY_PATH must be a git checkout of this repo containing a .env
-          # with the runtime secrets (see service/.env.example) next to docker-compose.prod.yml.
+          # with the runtime secrets (see .env.example) next to docker-compose.prod.yml.
           script: |
             set -e
             cd ${{ secrets.VDS_DEPLOY_PATH }}
             git pull --ff-only
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
             export GITHUB_REPOSITORY=${{ github.repository }}
-            docker compose -f service/docker-compose.prod.yml --env-file service/.env pull app
-            docker compose -f service/docker-compose.prod.yml --env-file service/.env up -d --remove-orphans
+            docker compose -f docker-compose.prod.yml --env-file .env pull app
+            docker compose -f docker-compose.prod.yml --env-file .env up -d --remove-orphans
             docker image prune -f
