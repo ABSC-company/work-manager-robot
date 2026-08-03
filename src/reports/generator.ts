@@ -2,11 +2,11 @@ import { prisma } from "../db/prisma";
 import { decryptSecret } from "../utils/crypto";
 import { fetchIssuesForPeriod, fetchAssigneeBacklog, resolveAccountIdByName } from "../integrations/jira/service";
 import type { JiraIssueSummary } from "../integrations/jira/service";
-import { fetchCommitsForPeriod } from "../integrations/github/service";
-import type { CommitSummary } from "../integrations/github/service";
+import { fetchCommitsForPeriod, fetchPullRequestsForPeriod, fetchPullRequestReviews } from "../integrations/github/service";
+import type { CommitSummary, PullRequestSummary, PullRequestReviewSummary } from "../integrations/github/service";
 import { extractDocumentationText } from "../integrations/ai/documentation";
 import { analyzeEmployeeActivity } from "../integrations/ai/analyzer";
-import { matchCommitsToIssues } from "../integrations/ai/match";
+import { matchCommitsToIssues, findUnmatchedPullRequests } from "../integrations/ai/match";
 import { computeEmployeeMetrics, aggregateMetrics, findDoneTimestamp } from "./metrics";
 import type { CompanyReportData, DirectionReportBlock, ProjectReportBlock, EmployeeReportBlock, IdleSummary } from "./types";
 import type { ReportPeriod } from "@prisma/client";
@@ -62,13 +62,27 @@ export async function buildCompanyReportData(opts: {
       }
 
       let commits: CommitSummary[] = [];
+      let pullRequests: PullRequestSummary[] = [];
+      let reviews: PullRequestReviewSummary[] = [];
       if (githubToken && direction.githubRepos.length > 0) {
         const perRepo = await Promise.all(
-          direction.githubRepos.map((repo) =>
-            fetchCommitsForPeriod(githubToken, { repo, start: opts.periodStart, end: opts.periodEnd })
-          )
+          direction.githubRepos.map(async (repo) => {
+            const [repoCommits, repoPrs] = await Promise.all([
+              fetchCommitsForPeriod(githubToken, { repo, start: opts.periodStart, end: opts.periodEnd }),
+              fetchPullRequestsForPeriod(githubToken, { repo, start: opts.periodStart, end: opts.periodEnd }),
+            ]);
+            const repoReviews = await fetchPullRequestReviews(githubToken, {
+              repo,
+              pullRequests: repoPrs,
+              start: opts.periodStart,
+              end: opts.periodEnd,
+            });
+            return { commits: repoCommits, pullRequests: repoPrs, reviews: repoReviews };
+          })
         );
-        commits = perRepo.flat();
+        commits = perRepo.flatMap((r) => r.commits);
+        pullRequests = perRepo.flatMap((r) => r.pullRequests);
+        reviews = perRepo.flatMap((r) => r.reviews);
       }
 
       const documentationText = await extractDocumentationText(direction.documentation, githubToken);
@@ -95,13 +109,16 @@ export async function buildCompanyReportData(opts: {
             ? await fetchAssigneeBacklog(jiraCreds, { projectKey: direction.jiraProjectKey, assigneeAccountId: accountId })
             : [];
 
-        const employeeCommits = employee.githubUsername
-          ? commits.filter((c) => c.author?.toLowerCase() === employee.githubUsername!.toLowerCase())
-          : [];
+        const ghUsername = employee.githubUsername?.toLowerCase() ?? null;
+        const employeeCommits = ghUsername ? commits.filter((c) => c.author?.toLowerCase() === ghUsername) : [];
+        const authoredPrs = ghUsername ? pullRequests.filter((pr) => pr.authorLogin?.toLowerCase() === ghUsername) : [];
+        const reviewsGiven = ghUsername ? reviews.filter((r) => r.reviewerLogin?.toLowerCase() === ghUsername) : [];
+        const pullRequestsMerged = ghUsername ? pullRequests.filter((pr) => pr.mergedByLogin?.toLowerCase() === ghUsername) : [];
 
-        const issuesWithCommits = matchCommitsToIssues(employeeIssues, employeeCommits);
+        const issuesWithCommits = matchCommitsToIssues(employeeIssues, employeeCommits, pullRequests);
         const matchedCommitUrls = new Set(issuesWithCommits.flatMap((i) => i.commits.map((c) => c.url)));
         const unmatchedCommits = employeeCommits.filter((c) => !matchedCommitUrls.has(c.url));
+        const unmatchedPullRequests = findUnmatchedPullRequests(employeeIssues, authoredPrs);
 
         const metrics = computeEmployeeMetrics(employeeIssues, backlog);
         const idleSummary = await computeIdleSummary(employee.id, opts.periodStart, opts.periodEnd);
@@ -112,6 +129,8 @@ export async function buildCompanyReportData(opts: {
           periodHours,
           issues: issuesWithCommits,
           unmatchedCommits,
+          unmatchedPullRequests,
+          reviewsGiven,
           idleSummary,
           documentationText,
         });
@@ -130,6 +149,14 @@ export async function buildCompanyReportData(opts: {
           periodHours,
           idleSummary,
           commits: employeeCommits.map((c) => ({ message: c.message, date: c.date, url: c.url })),
+          reviewsGiven: reviewsGiven.map((r) => ({
+            prNumber: r.prNumber,
+            prTitle: r.prTitle,
+            state: r.state,
+            submittedAt: r.submittedAt,
+            url: r.url,
+          })),
+          pullRequestsMerged: pullRequestsMerged.map((pr) => ({ number: pr.number, title: pr.title, url: pr.url })),
           issues: employeeIssues.map((issue) => ({
             key: issue.key,
             summary: issue.summary,
@@ -179,12 +206,14 @@ function issueDurationHours(issue: JiraIssueSummary): number | null {
 async function computeIdleSummary(employeeId: string, periodStart: Date, periodEnd: Date): Promise<IdleSummary> {
   const rows = await prisma.idlePeriod.findMany({
     where: { employeeId, date: { gte: periodStart, lte: periodEnd } },
+    orderBy: { date: "asc" },
   });
   return {
     totalDays: rows.length,
     totalHours: rows.reduce((sum, r) => sum + r.hours, 0),
     noBacklogDays: rows.filter((r) => r.reason === "NO_BACKLOG_TASKS").length,
     noActivityDays: rows.filter((r) => r.reason === "NO_ACTIVITY").length,
+    periods: rows.map((r) => ({ date: r.date, hours: r.hours, reason: r.reason, note: r.note })),
   };
 }
 

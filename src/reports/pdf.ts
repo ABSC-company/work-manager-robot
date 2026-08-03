@@ -1,7 +1,7 @@
 import PDFDocument from "pdfkit";
 import fs from "node:fs";
 import path from "node:path";
-import type { CompanyReportData, EmployeeReportBlock, DirectionReportBlock } from "./types";
+import type { CompanyReportData, EmployeeReportBlock, DirectionReportBlock, IdlePeriodEntry } from "./types";
 import type { AggregateMetrics } from "./metrics";
 import { drawStatusBarChart, drawCompletionDonut, drawTaskComparisonChart, drawDurationChart } from "./charts";
 import { drawTable } from "./table";
@@ -252,7 +252,29 @@ function renderEmployeeBlock(doc: PDFKit.PDFDocument, employee: EmployeeReportBl
 
   sectionLabel(doc, "Простои");
   doc.fontSize(9).fillColor("#333").text(formatIdleSummary(employee.idleSummary), { width: USABLE_WIDTH });
-  doc.fillColor("#000").moveDown(0.5);
+  doc.fillColor("#000").moveDown(0.4);
+  resetX(doc);
+
+  if (employee.idleSummary.periods.length > 0) {
+    const idleColumns: TableColumn<IdlePeriodEntry>[] = [
+      { header: "Дата", width: 70, cell: (p) => p.date.toISOString().slice(0, 10) },
+      { header: "Часы", width: 45, cell: (p) => formatHours(p.hours) },
+      { header: "Причина", width: 140, cell: (p) => idleReasonLabel(p.reason) },
+      { header: "Примечание", width: USABLE_WIDTH - (70 + 45 + 140), cell: (p) => p.note ?? "—" },
+    ];
+    const y = drawTable(doc, idleColumns, employee.idleSummary.periods, {
+      x: PAGE_MARGIN,
+      y: doc.y,
+      fontRegular: FONT_REGULAR,
+      fontBold: FONT_BOLD,
+      ensureSpace: (h) => ensureSpace(doc, h),
+    });
+    doc.y = y;
+    resetX(doc);
+    doc.moveDown(0.4);
+    resetX(doc);
+  }
+  doc.moveDown(0.2);
   resetX(doc);
 
   sectionLabel(doc, "Оценка эффективности (ИИ)");
@@ -281,6 +303,24 @@ function renderEmployeeBlock(doc: PDFKit.PDFDocument, employee: EmployeeReportBl
     }
     if (sorted.length > shown.length) {
       doc.fontSize(8).fillColor("#888").text(`  …и ещё ${sorted.length - shown.length} коммит(ов).`, { width: USABLE_WIDTH });
+    }
+    doc.fillColor("#000").moveDown(0.5);
+    resetX(doc);
+  }
+
+  if (employee.reviewsGiven.length > 0 || employee.pullRequestsMerged.length > 0) {
+    sectionLabel(doc, "Ревью и merge PR в GitHub");
+    for (const review of employee.reviewsGiven) {
+      ensureSpace(doc, 14);
+      resetX(doc);
+      doc.fontSize(8).fillColor("#333").text(`• ${reviewVerdict(review.state)} PR #${review.prNumber}: ${truncateText(review.prTitle, 70)}`, {
+        width: USABLE_WIDTH,
+      });
+    }
+    for (const pr of employee.pullRequestsMerged) {
+      ensureSpace(doc, 14);
+      resetX(doc);
+      doc.fontSize(8).fillColor("#333").text(`• Смёржил PR #${pr.number}: ${truncateText(pr.title, 70)}`, { width: USABLE_WIDTH });
     }
     doc.fillColor("#000").moveDown(0.5);
     resetX(doc);
@@ -350,12 +390,32 @@ function renderEmployeeBlock(doc: PDFKit.PDFDocument, employee: EmployeeReportBl
   doc.fillColor("#000");
 }
 
+function reviewVerdict(state: string): string {
+  switch (state) {
+    case "APPROVED":
+      return "Одобрил";
+    case "CHANGES_REQUESTED":
+      return "Запросил правки в";
+    case "COMMENTED":
+      return "Прокомментировал";
+    case "DISMISSED":
+      return "Отклонённое ревью:";
+    default:
+      return "Ревью:";
+  }
+}
+
 function formatIdleSummary(idle: EmployeeReportBlock["idleSummary"]): string {
   if (idle.totalDays === 0) return "За период простоев не зафиксировано.";
   const parts = [`Всего дней простоя: ${idle.totalDays} (~${formatHours(idle.totalHours)}).`];
   if (idle.noBacklogDays > 0) parts.push(`Из них без задач в беклоге: ${idle.noBacklogDays}.`);
   if (idle.noActivityDays > 0) parts.push(`Из них с задачами в беклоге, но без видимой активности: ${idle.noActivityDays}.`);
   return parts.join(" ");
+}
+
+function idleReasonLabel(reason: IdlePeriodEntry["reason"]): string {
+  if (reason === "NO_BACKLOG_TASKS") return "Нет задач в беклоге";
+  return "Задачи есть, активности не зафиксировано";
 }
 
 function formatHours(hours: number | null): string {

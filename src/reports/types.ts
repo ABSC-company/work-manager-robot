@@ -1,10 +1,18 @@
 import type { EmployeeMetrics, AggregateMetrics } from "./metrics";
 
+export interface IdlePeriodEntry {
+  date: Date; // calendar day (local to company timezone) this idle period covers
+  hours: number;
+  reason: "NO_BACKLOG_TASKS" | "NO_ACTIVITY";
+  note: string | null;
+}
+
 export interface IdleSummary {
   totalDays: number;
   totalHours: number;
   noBacklogDays: number;
   noActivityDays: number;
+  periods: IdlePeriodEntry[]; // one entry per idle day, sorted ascending by date
 }
 
 export interface EmployeeReportBlock {
@@ -18,6 +26,8 @@ export interface EmployeeReportBlock {
   periodHours: number; // wall-clock length of the report period, in hours — context for estimatedWorkedHours
   idleSummary: IdleSummary;
   commits: { message: string; date: Date; url: string }[];
+  reviewsGiven: { prNumber: number; prTitle: string; state: string; submittedAt: Date | null; url: string }[];
+  pullRequestsMerged: { number: number; title: string; url: string }[]; // PRs (others' or own) this employee clicked "merge" on
   issues: {
     key: string;
     summary: string;
