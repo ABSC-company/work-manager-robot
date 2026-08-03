@@ -6,6 +6,7 @@ export interface EmployeeReportBlock {
   position: string | null;
   metrics: EmployeeMetrics;
   aiSummary: string;
+  commits: { message: string; date: Date; url: string }[];
   issues: {
     key: string;
     summary: string;

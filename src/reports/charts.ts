@@ -2,23 +2,27 @@ import type { AggregateMetrics } from "./metrics";
 
 const PALETTE = ["#4C6EF5", "#12B886", "#F59F00", "#E64980", "#7048E8", "#15AABF", "#FA5252", "#82C91E"];
 
-/** Draws a compact vector bar chart (status distribution) directly onto the PDF — no native canvas dependency. */
+/** Draws a compact vector bar chart (status distribution) directly onto the PDF — no native canvas dependency.
+ * Returns the y coordinate immediately after the chart (title height is measured, not assumed, since long
+ * titles wrap to 2-3 lines on narrow columns and a fixed offset would let the bars overlap the wrapped text). */
 export function drawStatusBarChart(
   doc: PDFKit.PDFDocument,
   metrics: AggregateMetrics,
-  opts: { x: number; y: number; width: number; height: number; title: string }
-): void {
+  opts: { x: number; y: number; width: number; barAreaHeight: number; title: string }
+): number {
   const entries = Object.entries(metrics.statusCounts);
-  const { x, y, width, height, title } = opts;
+  const { x, y, width, barAreaHeight, title } = opts;
 
-  doc.fontSize(7.5).fillColor("#666").text(title, x, y, { width });
-  const chartTop = y + 11;
-  const chartHeight = height - 11;
-  const axisY = chartTop + chartHeight;
+  doc.fontSize(7.5).fillColor("#666");
+  const titleH = doc.heightOfString(title, { width });
+  doc.text(title, x, y, { width });
+  const chartTop = y + titleH + 4;
+  const axisY = chartTop + barAreaHeight;
 
   if (entries.length === 0) {
     doc.fontSize(7).fillColor("#999").text("Нет данных", x, chartTop);
-    return;
+    doc.fillColor("#000");
+    return chartTop + 12;
   }
 
   const maxValue = Math.max(...entries.map(([, v]) => v), 1);
@@ -26,7 +30,7 @@ export function drawStatusBarChart(
   const barWidth = (width - barGap * (entries.length - 1)) / entries.length;
 
   entries.forEach(([status, count], i) => {
-    const barHeight = (count / maxValue) * (chartHeight - 12);
+    const barHeight = (count / maxValue) * (barAreaHeight - 10);
     const barX = x + i * (barWidth + barGap);
     const barY = axisY - barHeight;
     doc.rect(barX, barY, barWidth, barHeight).fill(PALETTE[i % PALETTE.length]);
@@ -39,29 +43,35 @@ export function drawStatusBarChart(
 
   doc.moveTo(x, axisY).lineTo(x + width, axisY).strokeColor("#ccc").stroke();
   doc.fillColor("#000").strokeColor("#000");
+  return axisY + 11;
 }
 
-/** Draws a compact vector donut chart (completed vs remaining) directly onto the PDF. */
+/** Draws a compact vector donut chart (completed vs remaining) directly onto the PDF.
+ * `opts.y` is the TOP of the block (title first, then the circle below it) — returns the bottom y. */
 export function drawCompletionDonut(
   doc: PDFKit.PDFDocument,
   metrics: AggregateMetrics,
   opts: { x: number; y: number; radius: number; title: string }
-): void {
+): number {
   const { x, y, radius, title } = opts;
   const completed = metrics.completedTasks;
   const remaining = Math.max(metrics.totalTasks - metrics.completedTasks, 0);
   const total = completed + remaining;
 
-  doc.fontSize(7.5).fillColor("#666").text(title, x - radius - 10, y - radius - 12, { width: radius * 2 + 20, align: "center" });
+  const titleWidth = radius * 2 + 20;
+  const titleX = x - radius - 10;
+  doc.fontSize(7.5).fillColor("#666");
+  const titleH = doc.heightOfString(title, { width: titleWidth, align: "center" });
+  doc.text(title, titleX, y, { width: titleWidth, align: "center" });
 
   const cx = x;
-  const cy = y;
+  const cy = y + titleH + 6 + radius;
 
   if (total === 0) {
     doc.circle(cx, cy, radius).fillColor("#eee").fill();
     doc.fontSize(7).fillColor("#999").text("Нет данных", cx - radius, cy - 4, { width: radius * 2, align: "center" });
     doc.fillColor("#000");
-    return;
+    return cy + radius;
   }
 
   const completedFraction = completed / total;
@@ -74,6 +84,7 @@ export function drawCompletionDonut(
     .fillColor("#000")
     .text(`${metrics.completionPercent.toFixed(0)}%`, cx - radius, cy - 5, { width: radius * 2, align: "center" });
   doc.fillColor("#000");
+  return cy + radius;
 }
 
 function drawPieSlice(
@@ -110,8 +121,10 @@ export function drawTaskComparisonChart(
   opts: { x: number; y: number; width: number; title: string }
 ): number {
   const { x, y, width, title } = opts;
-  doc.fontSize(8).fillColor("#666").text(title, x, y, { width });
-  let rowY = y + 13;
+  doc.fontSize(8).fillColor("#666");
+  const titleH = doc.heightOfString(title, { width });
+  doc.text(title, x, y, { width });
+  let rowY = y + titleH + 4;
 
   if (items.length === 0) {
     doc.fontSize(7).fillColor("#999").text("Нет данных", x, rowY);
@@ -159,8 +172,10 @@ export function drawDurationChart(
   opts: { x: number; y: number; width: number; title: string }
 ): number {
   const { x, y, width, title } = opts;
-  doc.fontSize(8).fillColor("#666").text(title, x, y, { width });
-  let rowY = y + 13;
+  doc.fontSize(8).fillColor("#666");
+  const titleH = doc.heightOfString(title, { width });
+  doc.text(title, x, y, { width });
+  let rowY = y + titleH + 4;
 
   const withData = items.filter((i): i is { label: string; avgHours: number } => i.avgHours !== null);
   if (withData.length === 0) {

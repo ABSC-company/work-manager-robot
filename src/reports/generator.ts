@@ -117,6 +117,7 @@ export async function buildCompanyReportData(opts: {
           position: employee.position,
           metrics,
           aiSummary: analysis.summary,
+          commits: employeeCommits.map((c) => ({ message: c.message, date: c.date, url: c.url })),
           issues: employeeIssues.map((issue) => ({
             key: issue.key,
             summary: issue.summary,

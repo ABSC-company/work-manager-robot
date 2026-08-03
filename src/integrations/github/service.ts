@@ -1,4 +1,5 @@
 import { createGithubClient } from "./client";
+import { isGithubNotFound, GITHUB_404_HINT } from "./errors";
 import { logger } from "../../utils/logger";
 
 export interface CommitSummary {
@@ -45,7 +46,7 @@ export async function fetchCommitsForPeriod(
       }
     }
   } catch (err) {
-    logger.warn({ err, repo: opts.repo }, "failed to fetch github commits");
+    logger.warn({ err, repo: opts.repo, hint: isGithubNotFound(err) ? GITHUB_404_HINT : undefined }, "failed to fetch github commits");
   }
 
   return commits;

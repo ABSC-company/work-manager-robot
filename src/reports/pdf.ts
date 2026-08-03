@@ -11,12 +11,9 @@ const USABLE_WIDTH = PAGE_WIDTH - PAGE_MARGIN * 2;
 
 // Minimalist chart sizing: small enough to feel like inline stats, not full illustrations.
 const BAR_CHART_WIDTH = 170;
-const BAR_CHART_HEIGHT = 80;
+const BAR_CHART_BODY_HEIGHT = 64; // bars only, title height is measured separately and added on top
 const DONUT_RADIUS = 32;
 const CHART_GAP_X = 34;
-
-// Reserved vertical space below the bar+donut chart pair before any following text is drawn.
-const CHART_BLOCK_HEIGHT = 100;
 const CHART_BLOCK_GAP = 18;
 
 // DejaVu Sans ships full Cyrillic + Latin glyph coverage in one file, unlike PDFKit's built-in
@@ -120,22 +117,24 @@ function renderMetricsSection(doc: PDFKit.PDFDocument, title: string, metrics: A
   renderMetricsTable(doc, metrics);
 
   if (Object.keys(metrics.statusCounts).length > 0) {
-    ensureSpace(doc, CHART_BLOCK_HEIGHT + CHART_BLOCK_GAP + 15);
+    // Generous worst-case reservation for the page-break check — titles can wrap to multiple lines,
+    // the actual heights below (from the draw functions' return values) are what really matters.
+    ensureSpace(doc, 160);
     const y = doc.y;
-    drawStatusBarChart(doc, metrics, {
+    const barBottom = drawStatusBarChart(doc, metrics, {
       x: PAGE_MARGIN,
       y,
       width: BAR_CHART_WIDTH,
-      height: BAR_CHART_HEIGHT,
+      barAreaHeight: BAR_CHART_BODY_HEIGHT,
       title: `Статусы — ${title}`,
     });
-    drawCompletionDonut(doc, metrics, {
+    const donutBottom = drawCompletionDonut(doc, metrics, {
       x: PAGE_MARGIN + BAR_CHART_WIDTH + CHART_GAP_X + DONUT_RADIUS,
-      y: y + 16 + DONUT_RADIUS,
+      y,
       radius: DONUT_RADIUS,
       title: `% выполнения — ${title}`,
     });
-    doc.y = y + CHART_BLOCK_HEIGHT + CHART_BLOCK_GAP;
+    doc.y = Math.max(barBottom, donutBottom) + CHART_BLOCK_GAP;
     resetX(doc);
   } else {
     doc.moveDown(0.5);
@@ -247,6 +246,25 @@ function renderEmployeeBlock(doc: PDFKit.PDFDocument, employee: EmployeeReportBl
   doc.fillColor("#000").moveDown(0.6);
   resetX(doc);
 
+  if (employee.commits.length > 0) {
+    sectionLabel(doc, `Активность в GitHub (${employee.commits.length} коммит${pluralSuffix(employee.commits.length)})`);
+    const sorted = [...employee.commits].sort((a, b) => b.date.getTime() - a.date.getTime());
+    const shown = sorted.slice(0, 8);
+    for (const commit of shown) {
+      ensureSpace(doc, 14);
+      resetX(doc);
+      const firstLine = commit.message.split("\n")[0];
+      doc.fontSize(8).fillColor("#333").text(`• ${commit.date.toISOString().slice(0, 10)}  ${truncateText(firstLine, 90)}`, {
+        width: USABLE_WIDTH,
+      });
+    }
+    if (sorted.length > shown.length) {
+      doc.fontSize(8).fillColor("#888").text(`  …и ещё ${sorted.length - shown.length} коммит(ов).`, { width: USABLE_WIDTH });
+    }
+    doc.fillColor("#000").moveDown(0.5);
+    resetX(doc);
+  }
+
   if (employee.issues.length > 0) {
     sectionLabel(doc, "Задачи");
     for (const issue of employee.issues) {
@@ -276,4 +294,16 @@ function formatHours(hours: number | null): string {
   if (hours === null) return "н/д";
   if (hours < 24) return `${hours.toFixed(1)} ч`;
   return `${(hours / 24).toFixed(1)} дн`;
+}
+
+function pluralSuffix(count: number): string {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) return "";
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return "а";
+  return "ов";
+}
+
+function truncateText(text: string, max: number): string {
+  return text.length > max ? text.slice(0, max - 1) + "…" : text;
 }

@@ -62,7 +62,7 @@ followsDocumentation должен быть null, если документаци
   try {
     const response = await anthropic.messages.create({
       model: AI_MODEL,
-      max_tokens: 2000,
+      max_tokens: 8000,
       messages: [{ role: "user", content: prompt }],
     });
 

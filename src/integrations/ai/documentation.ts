@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import mammoth from "mammoth";
 import type { Documentation } from "@prisma/client";
 import { createGithubClient } from "../github/client";
+import { isGithubNotFound, GITHUB_404_HINT } from "../github/errors";
 import { logger } from "../../utils/logger";
 
 const MAX_DOC_CHARS = 8000;
@@ -23,7 +24,7 @@ export async function extractDocumentationText(
         if (text) parts.push(`### ${doc.name} (README)\n${text}`);
       }
     } catch (err) {
-      logger.warn({ err, doc: doc.name }, "failed to extract documentation text");
+      logger.warn({ err, doc: doc.name, hint: isGithubNotFound(err) ? GITHUB_404_HINT : undefined }, "failed to extract documentation text");
     }
   }
 
