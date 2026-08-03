@@ -58,6 +58,7 @@ jobs:
           host: ${{ secrets.VDS_HOST }}
           username: ${{ secrets.VDS_USER }}
           key: ${{ secrets.VDS_SSH_KEY }}
+          passphrase: ${{ secrets.VDS_SSH_PASSPHRASE }}
           # VDS_DEPLOY_PATH must be a git checkout of this repo containing a .env
           # with the runtime secrets (see service/.env.example) next to docker-compose.prod.yml.
           script: |

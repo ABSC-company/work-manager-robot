@@ -96,6 +96,7 @@ Workflow уже в репозитории: `.github/workflows/deploy.yml`.
    - `VDS_HOST` — IP/домен сервера
    - `VDS_USER` — ssh-пользователь (например, `deploy`)
    - `VDS_SSH_KEY` — приватный ключ (публичный добавить в `~/.ssh/authorized_keys` на сервере)
+   - `VDS_SSH_PASSPHRASE` — passphrase от приватного ключа, если он защищён паролем (workflow передаёт его в `appleboy/ssh-action` полем `passphrase`, ключ расшифровывается неинтерактивно на лету). Если ключ без passphrase — секрет не создавать, `appleboy/ssh-action` спокойно работает с пустым значением.
    - `VDS_DEPLOY_PATH` — путь к репозиторию на сервере, например `/opt/manager`
 2. `GITHUB_TOKEN` для входа в GHCR передаётся автоматически, дополнительно настраивать не нужно.
 3. Убедиться, что пакет образа (`ghcr.io/<owner>/<repo>`) публичный либо что сервер выполняет `docker login ghcr.io` (workflow делает это самостоятельно перед `pull`).
