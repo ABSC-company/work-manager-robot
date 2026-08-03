@@ -12,6 +12,7 @@ import { linkDirectionConversation } from "./conversations/linkDirection";
 import { setReportConfigConversation, setRequiredApprovalsConversation } from "./conversations/setReportConfig";
 import { addOccasionConversation } from "./conversations/addOccasion";
 import { mapIdentityConversation } from "./conversations/mapIdentity";
+import { reportCustomConversation } from "./conversations/reportCustom";
 import { listEmployees } from "./conversations/listEmployees";
 import { generateCompanyReport } from "../reports/service";
 import { sendReportForApproval, registerApproval } from "../reports/dispatch";
@@ -40,6 +41,7 @@ bot.use(createConversation(setReportConfigConversation, "setReportConfig"));
 bot.use(createConversation(setRequiredApprovalsConversation, "setRequiredApprovals"));
 bot.use(createConversation(addOccasionConversation, "addOccasion"));
 bot.use(createConversation(mapIdentityConversation, "mapIdentity"));
+bot.use(createConversation(reportCustomConversation, "reportCustom"));
 
 bot.command("cancel", async (ctx) => {
   const active = await ctx.conversation.active();
@@ -88,7 +90,8 @@ bot.command("help", async (ctx) => {
       "/setapprovals — задать кол-во требуемых одобрений отчёта",
       "/setgroupchat — привязать текущий чат как групповой (для пересылки отчётов/напоминаний)",
       "/addoccasion — добавить мероприятие/напоминание",
-      "/report <daily|weekly|monthly> — сгенерировать отчёт сейчас",
+      "/report <daily|weekly|monthly> — сгенерировать отчёт сейчас (weekly — последние 7 дней, monthly — последние 30 дней)",
+      "/reportcustom — сгенерировать отчёт за произвольный период (спросит даты ДД.ММ.ГГГГ)",
       "",
       "Просмотр:",
       "/listcompanies — список компаний",
@@ -239,6 +242,8 @@ bot.command("report", requireCompanyAdmin, async (ctx) => {
     await ctx.reply("Не удалось сформировать отчёт. Подробности в логах сервиса.");
   }
 });
+
+bot.command("reportcustom", requireCompanyAdmin, async (ctx) => ctx.conversation.enter("reportCustom"));
 
 bot.callbackQuery(/^report_approve:(.+)$/, async (ctx) => {
   const reportId = ctx.match[1];

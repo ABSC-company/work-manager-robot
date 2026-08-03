@@ -3,12 +3,21 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CompanyReportData, EmployeeReportBlock, DirectionReportBlock } from "./types";
 import type { AggregateMetrics } from "./metrics";
-import { drawStatusBarChart, drawCompletionDonut, drawEmployeeComparisonChart } from "./charts";
+import { drawStatusBarChart, drawCompletionDonut, drawTaskComparisonChart, drawDurationChart } from "./charts";
 
 const PAGE_MARGIN = 40;
 const PAGE_WIDTH = 595.28; // A4
-const PAGE_HEIGHT = 841.89; // A4
 const USABLE_WIDTH = PAGE_WIDTH - PAGE_MARGIN * 2;
+
+// Minimalist chart sizing: small enough to feel like inline stats, not full illustrations.
+const BAR_CHART_WIDTH = 170;
+const BAR_CHART_HEIGHT = 80;
+const DONUT_RADIUS = 32;
+const CHART_GAP_X = 34;
+
+// Reserved vertical space below the bar+donut chart pair before any following text is drawn.
+const CHART_BLOCK_HEIGHT = 100;
+const CHART_BLOCK_GAP = 18;
 
 // DejaVu Sans ships full Cyrillic + Latin glyph coverage in one file, unlike PDFKit's built-in
 // Helvetica/Times (Latin-only AFM fonts, which render Russian text as garbage/missing glyphs).
@@ -29,7 +38,7 @@ export async function renderReportPdf(data: CompanyReportData, outputPath: strin
   doc.font(FONT_REGULAR).fontSize(12).fillColor("#555").text(periodTitle(data.period) + ` — ${data.periodLabel}`, {
     width: USABLE_WIDTH,
   });
-  doc.fillColor("#000").moveDown(1);
+  doc.fillColor("#000").moveDown(1.2);
   resetX(doc);
 
   renderMetricsSection(doc, "Общие показатели по компании", data.overallMetrics);
@@ -39,9 +48,22 @@ export async function renderReportPdf(data: CompanyReportData, outputPath: strin
     resetX(doc);
     doc.font(FONT_BOLD).fontSize(16).text(`Проект: ${project.projectName}`, { width: USABLE_WIDTH });
     doc.font(FONT_REGULAR);
-    doc.moveDown(0.5);
+    doc.moveDown(0.8);
     resetX(doc);
     renderMetricsSection(doc, `Показатели проекта "${project.projectName}"`, project.metrics);
+
+    if (project.directions.length > 1) {
+      ensureSpace(doc, 30 + project.directions.length * 14);
+      const y = drawTaskComparisonChart(
+        doc,
+        project.directions.map((d) => ({ label: d.directionName, total: d.metrics.totalTasks, completed: d.metrics.completedTasks })),
+        { x: PAGE_MARGIN, y: doc.y, width: USABLE_WIDTH, title: "Сравнение направлений — задачи (закрыто/всего)" }
+      );
+      doc.y = y + 8;
+      resetX(doc);
+      doc.moveDown(0.4);
+      resetX(doc);
+    }
 
     for (const direction of project.directions) {
       renderDirectionBlock(doc, direction);
@@ -58,8 +80,9 @@ export async function renderReportPdf(data: CompanyReportData, outputPath: strin
 
 function periodTitle(period: CompanyReportData["period"]): string {
   if (period === "DAILY") return "Ежедневный отчёт";
-  if (period === "WEEKLY") return "Еженедельный отчёт";
-  return "Ежемесячный отчёт";
+  if (period === "WEEKLY") return "Еженедельный отчёт (последние 7 дней)";
+  if (period === "MONTHLY") return "Ежемесячный отчёт (последние 30 дней)";
+  return "Отчёт за выбранный период";
 }
 
 /** Resets the text cursor to the left margin. Needed after chart helpers draw at explicit x coordinates,
@@ -77,25 +100,47 @@ function ensureSpace(doc: PDFKit.PDFDocument, height: number): void {
   }
 }
 
+/** Thin horizontal rule used to visually separate sections that would otherwise sit flush against each other. */
+function divider(doc: PDFKit.PDFDocument): void {
+  resetX(doc);
+  doc.moveTo(PAGE_MARGIN, doc.y).lineTo(PAGE_MARGIN + USABLE_WIDTH, doc.y).strokeColor("#E0E0E0").lineWidth(0.5).stroke();
+  doc.strokeColor("#000");
+  doc.moveDown(0.6);
+  resetX(doc);
+}
+
+function sectionLabel(doc: PDFKit.PDFDocument, text: string): void {
+  resetX(doc);
+  doc.font(FONT_BOLD).fontSize(8).fillColor("#888").text(text.toUpperCase(), { width: USABLE_WIDTH });
+  doc.font(FONT_REGULAR).fillColor("#000").moveDown(0.2);
+  resetX(doc);
+}
+
 function renderMetricsSection(doc: PDFKit.PDFDocument, title: string, metrics: AggregateMetrics): void {
   renderMetricsTable(doc, metrics);
 
   if (Object.keys(metrics.statusCounts).length > 0) {
-    ensureSpace(doc, 170);
+    ensureSpace(doc, CHART_BLOCK_HEIGHT + CHART_BLOCK_GAP + 15);
     const y = doc.y;
-    const barChartWidth = 260;
-    const donutRadius = 55;
-    drawStatusBarChart(doc, metrics, { x: PAGE_MARGIN, y, width: barChartWidth, height: 130, title: `Задачи по статусам — ${title}` });
+    drawStatusBarChart(doc, metrics, {
+      x: PAGE_MARGIN,
+      y,
+      width: BAR_CHART_WIDTH,
+      height: BAR_CHART_HEIGHT,
+      title: `Статусы — ${title}`,
+    });
     drawCompletionDonut(doc, metrics, {
-      x: PAGE_MARGIN + barChartWidth + 60 + donutRadius,
-      y: y + 30 + donutRadius,
-      radius: donutRadius,
+      x: PAGE_MARGIN + BAR_CHART_WIDTH + CHART_GAP_X + DONUT_RADIUS,
+      y: y + 16 + DONUT_RADIUS,
+      radius: DONUT_RADIUS,
       title: `% выполнения — ${title}`,
     });
-    doc.y = y + 150;
+    doc.y = y + CHART_BLOCK_HEIGHT + CHART_BLOCK_GAP;
+    resetX(doc);
+  } else {
+    doc.moveDown(0.5);
     resetX(doc);
   }
-  doc.moveDown(0.5);
 }
 
 function renderMetricsTable(doc: PDFKit.PDFDocument, metrics: AggregateMetrics): void {
@@ -103,6 +148,8 @@ function renderMetricsTable(doc: PDFKit.PDFDocument, metrics: AggregateMetrics):
   doc.text(`Всего задач: ${metrics.totalTasks}   Завершено: ${metrics.completedTasks}   % выполнения: ${metrics.completionPercent.toFixed(1)}%`, {
     width: USABLE_WIDTH,
   });
+  doc.moveDown(0.2);
+  resetX(doc);
   doc.text(
     `Среднее время выполнения задачи: ${formatHours(metrics.avgTaskDurationHours)}   Средний интервал между задачами: ${formatHours(
       metrics.avgGapBetweenTasksHours
@@ -112,33 +159,45 @@ function renderMetricsTable(doc: PDFKit.PDFDocument, metrics: AggregateMetrics):
   const statusLine = Object.entries(metrics.statusCounts)
     .map(([status, count]) => `${status}: ${count}`)
     .join(", ");
-  if (statusLine) doc.text(`По статусам: ${statusLine}`, { width: USABLE_WIDTH });
+  if (statusLine) {
+    doc.moveDown(0.2);
+    resetX(doc);
+    doc.fillColor("#555").text(`По статусам: ${statusLine}`, { width: USABLE_WIDTH });
+  }
   doc.fillColor("#000").moveDown(0.5);
   resetX(doc);
 }
 
 function renderDirectionBlock(doc: PDFKit.PDFDocument, direction: DirectionReportBlock): void {
   ensureSpace(doc, 40);
-  doc.moveDown(1);
-  resetX(doc);
+  doc.moveDown(1.2);
+  divider(doc);
   doc.font(FONT_BOLD).fontSize(14).fillColor("#000").text(`Направление: ${direction.directionName}`, { width: USABLE_WIDTH });
   doc.font(FONT_REGULAR);
+  doc.moveDown(0.4);
+  resetX(doc);
   renderMetricsSection(doc, `направления "${direction.directionName}"`, direction.metrics);
 
-  if (direction.employees.length > 0) {
-    ensureSpace(doc, 30 + direction.employees.length * 16);
-    const y = drawEmployeeComparisonChart(
+  if (direction.employees.length > 1) {
+    ensureSpace(doc, 30 + direction.employees.length * 12 * 2);
+    const halfWidth = (USABLE_WIDTH - 20) / 2;
+
+    const y = doc.y;
+    const yAfterTasks = drawTaskComparisonChart(
       doc,
-      direction.employees.map((e) => ({
-        employeeName: e.employeeName,
-        totalTasks: e.metrics.totalTasks,
-        completedTasks: e.metrics.completedTasks,
-      })),
-      { x: PAGE_MARGIN, y: doc.y, width: USABLE_WIDTH, title: "Сравнение сотрудников — задачи (закрыто/всего)" }
+      direction.employees.map((e) => ({ label: e.employeeName, total: e.metrics.totalTasks, completed: e.metrics.completedTasks })),
+      { x: PAGE_MARGIN, y, width: halfWidth, title: "Задачи (закрыто/всего)" }
     );
-    doc.y = y;
+    const yAfterDuration = drawDurationChart(
+      doc,
+      direction.employees.map((e) => ({ label: e.employeeName, avgHours: e.metrics.avgTaskDurationHours })),
+      { x: PAGE_MARGIN + halfWidth + 20, y, width: halfWidth, title: "Среднее время задачи" }
+    );
+
+    doc.y = Math.max(yAfterTasks, yAfterDuration) + 8;
     resetX(doc);
-    doc.moveDown(0.5);
+    doc.moveDown(0.4);
+    resetX(doc);
   }
 
   for (const employee of direction.employees) {
@@ -147,10 +206,10 @@ function renderDirectionBlock(doc: PDFKit.PDFDocument, direction: DirectionRepor
 }
 
 function renderEmployeeBlock(doc: PDFKit.PDFDocument, employee: EmployeeReportBlock): void {
-  ensureSpace(doc, 90);
+  ensureSpace(doc, 100);
 
-  doc.moveDown(0.5);
-  resetX(doc);
+  doc.moveDown(0.6);
+  divider(doc);
   doc
     .font(FONT_BOLD)
     .fontSize(12)
@@ -159,6 +218,8 @@ function renderEmployeeBlock(doc: PDFKit.PDFDocument, employee: EmployeeReportBl
       width: USABLE_WIDTH,
     });
   doc.font(FONT_REGULAR);
+  doc.moveDown(0.4);
+  resetX(doc);
 
   renderMetricsTable(doc, {
     totalTasks: employee.metrics.totalTasks,
@@ -178,26 +239,37 @@ function renderEmployeeBlock(doc: PDFKit.PDFDocument, employee: EmployeeReportBl
       width: USABLE_WIDTH,
     });
   }
-  doc.fillColor("#000");
-
-  doc.fontSize(9).fillColor("#333").text(employee.aiSummary, { width: USABLE_WIDTH, align: "justify" });
-  doc.fillColor("#000").moveDown(0.3);
-  resetX(doc);
-
-  for (const issue of employee.issues) {
-    ensureSpace(doc, 40);
-    resetX(doc);
-    doc.fontSize(9).fillColor("#000").text(`• ${issue.key}: ${issue.summary} [${issue.currentStatus}]`, { width: USABLE_WIDTH });
-    const history = issue.statusHistory.map((t) => `${t.from ?? "—"}→${t.to} (${t.at.toISOString().slice(0, 16)})`).join("; ");
-    if (history) doc.fontSize(8).fillColor("#666").text(`  История: ${history}`, { width: USABLE_WIDTH - 10 });
-    if (issue.workDoneNote) {
-      const docLabel =
-        issue.followsDocumentation === true ? " [соответствует документации]" : issue.followsDocumentation === false ? " [расхождение с документацией]" : "";
-      doc.fontSize(8).fillColor("#666").text(`  GitHub: ${issue.workDoneNote}${docLabel}`, { width: USABLE_WIDTH - 10 });
-    }
-  }
   doc.fillColor("#000").moveDown(0.5);
   resetX(doc);
+
+  sectionLabel(doc, "Итог по периоду");
+  doc.fontSize(9).fillColor("#333").text(employee.aiSummary, { width: USABLE_WIDTH, align: "justify" });
+  doc.fillColor("#000").moveDown(0.6);
+  resetX(doc);
+
+  if (employee.issues.length > 0) {
+    sectionLabel(doc, "Задачи");
+    for (const issue of employee.issues) {
+      ensureSpace(doc, 44);
+      resetX(doc);
+      doc.fontSize(9).fillColor("#000").text(`• ${issue.key}: ${issue.summary} [${issue.currentStatus}]`, { width: USABLE_WIDTH });
+      const history = issue.statusHistory.map((t) => `${t.from ?? "—"}→${t.to} (${t.at.toISOString().slice(0, 16)})`).join("; ");
+      if (history) doc.fontSize(8).fillColor("#666").text(`  История: ${history}`, { width: USABLE_WIDTH - 10 });
+      if (issue.workDoneNote) {
+        const docLabel =
+          issue.followsDocumentation === true
+            ? " [соответствует документации]"
+            : issue.followsDocumentation === false
+              ? " [расхождение с документацией]"
+              : "";
+        doc.fontSize(8).fillColor("#666").text(`  GitHub: ${issue.workDoneNote}${docLabel}`, { width: USABLE_WIDTH - 10 });
+      }
+      doc.moveDown(0.3);
+      resetX(doc);
+    }
+  }
+
+  doc.fillColor("#000");
 }
 
 function formatHours(hours: number | null): string {

@@ -157,5 +157,6 @@ function formatPeriodLabel(period: ReportPeriod, start: Date, end: Date): string
   const fmt = (d: Date) => d.toISOString().slice(0, 10);
   if (period === "DAILY") return `день ${fmt(start)}`;
   if (period === "WEEKLY") return `неделя ${fmt(start)}..${fmt(end)}`;
-  return `месяц ${fmt(start)}..${fmt(end)}`;
+  if (period === "MONTHLY") return `месяц ${fmt(start)}..${fmt(end)}`;
+  return `период ${fmt(start)}..${fmt(end)}`;
 }

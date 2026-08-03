@@ -56,16 +56,9 @@ export function startOfDayInZone(instant: Date, timeZone: string): Date {
   return zonedTimeToUtc({ year: p.year, month: p.month, day: p.day, hour: 0, minute: 0 }, timeZone);
 }
 
-export function startOfWeekInZone(instant: Date, timeZone: string): Date {
-  const p = getZonedParts(instant, timeZone);
-  const dayStart = startOfDayInZone(instant, timeZone);
-  const mondayOffset = (p.weekday + 6) % 7; // days since Monday
-  return new Date(dayStart.getTime() - mondayOffset * 24 * 60 * 60 * 1000);
-}
-
-export function startOfMonthInZone(instant: Date, timeZone: string): Date {
-  const p = getZonedParts(instant, timeZone);
-  return zonedTimeToUtc({ year: p.year, month: p.month, day: 1, hour: 0, minute: 0 }, timeZone);
+/** Rolling window start: `days` days before `instant` (e.g. "last 7 days"), not the calendar period start. */
+export function daysBeforeInstant(instant: Date, days: number): Date {
+  return new Date(instant.getTime() - days * 24 * 60 * 60 * 1000);
 }
 
 /** True if `instant`, in `timeZone`, falls exactly `daysBefore` days before the last day of its month. */

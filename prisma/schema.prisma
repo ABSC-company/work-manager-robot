@@ -126,6 +126,7 @@ enum ReportPeriod {
   DAILY
   WEEKLY
   MONTHLY
+  CUSTOM
 }
 
 enum ReportStatus {

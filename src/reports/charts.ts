@@ -2,7 +2,7 @@ import type { AggregateMetrics } from "./metrics";
 
 const PALETTE = ["#4C6EF5", "#12B886", "#F59F00", "#E64980", "#7048E8", "#15AABF", "#FA5252", "#82C91E"];
 
-/** Draws a simple vector bar chart (status distribution) directly onto the PDF — no native canvas dependency. */
+/** Draws a compact vector bar chart (status distribution) directly onto the PDF — no native canvas dependency. */
 export function drawStatusBarChart(
   doc: PDFKit.PDFDocument,
   metrics: AggregateMetrics,
@@ -11,37 +11,37 @@ export function drawStatusBarChart(
   const entries = Object.entries(metrics.statusCounts);
   const { x, y, width, height, title } = opts;
 
-  doc.fontSize(9).fillColor("#333").text(title, x, y, { width });
-  const chartTop = y + 14;
-  const chartHeight = height - 14;
+  doc.fontSize(7.5).fillColor("#666").text(title, x, y, { width });
+  const chartTop = y + 11;
+  const chartHeight = height - 11;
   const axisY = chartTop + chartHeight;
 
   if (entries.length === 0) {
-    doc.fontSize(8).fillColor("#999").text("Нет данных", x, chartTop);
+    doc.fontSize(7).fillColor("#999").text("Нет данных", x, chartTop);
     return;
   }
 
   const maxValue = Math.max(...entries.map(([, v]) => v), 1);
-  const barGap = 8;
+  const barGap = 5;
   const barWidth = (width - barGap * (entries.length - 1)) / entries.length;
 
   entries.forEach(([status, count], i) => {
-    const barHeight = (count / maxValue) * (chartHeight - 16);
+    const barHeight = (count / maxValue) * (chartHeight - 12);
     const barX = x + i * (barWidth + barGap);
     const barY = axisY - barHeight;
     doc.rect(barX, barY, barWidth, barHeight).fill(PALETTE[i % PALETTE.length]);
-    doc.fontSize(7).fillColor("#000").text(String(count), barX, barY - 9, { width: barWidth, align: "center" });
+    doc.fontSize(6).fillColor("#000").text(String(count), barX, barY - 7, { width: barWidth, align: "center" });
     doc
-      .fontSize(6)
+      .fontSize(5.5)
       .fillColor("#555")
-      .text(truncate(status, 10), barX, axisY + 2, { width: barWidth, align: "center" });
+      .text(truncate(status, 8), barX, axisY + 2, { width: barWidth, align: "center" });
   });
 
   doc.moveTo(x, axisY).lineTo(x + width, axisY).strokeColor("#ccc").stroke();
   doc.fillColor("#000").strokeColor("#000");
 }
 
-/** Draws a simple vector donut chart (completed vs remaining) directly onto the PDF. */
+/** Draws a compact vector donut chart (completed vs remaining) directly onto the PDF. */
 export function drawCompletionDonut(
   doc: PDFKit.PDFDocument,
   metrics: AggregateMetrics,
@@ -52,14 +52,14 @@ export function drawCompletionDonut(
   const remaining = Math.max(metrics.totalTasks - metrics.completedTasks, 0);
   const total = completed + remaining;
 
-  doc.fontSize(9).fillColor("#333").text(title, x - radius, y - radius - 14, { width: radius * 2, align: "center" });
+  doc.fontSize(7.5).fillColor("#666").text(title, x - radius - 10, y - radius - 12, { width: radius * 2 + 20, align: "center" });
 
   const cx = x;
   const cy = y;
 
   if (total === 0) {
     doc.circle(cx, cy, radius).fillColor("#eee").fill();
-    doc.fontSize(8).fillColor("#999").text("Нет данных", cx - radius, cy - 4, { width: radius * 2, align: "center" });
+    doc.fontSize(7).fillColor("#999").text("Нет данных", cx - radius, cy - 4, { width: radius * 2, align: "center" });
     doc.fillColor("#000");
     return;
   }
@@ -70,9 +70,9 @@ export function drawCompletionDonut(
 
   doc.circle(cx, cy, radius * 0.55).fillColor("#fff").fill();
   doc
-    .fontSize(11)
+    .fontSize(9)
     .fillColor("#000")
-    .text(`${metrics.completionPercent.toFixed(0)}%`, cx - radius, cy - 6, { width: radius * 2, align: "center" });
+    .text(`${metrics.completionPercent.toFixed(0)}%`, cx - radius, cy - 5, { width: radius * 2, align: "center" });
   doc.fillColor("#000");
 }
 
@@ -96,40 +96,47 @@ function drawPieSlice(
   doc.closePath().fillColor(color).fill();
 }
 
-/** Draws a horizontal stacked-bar comparison of completed vs. open tasks per employee. Returns the y coordinate after the chart. */
-export function drawEmployeeComparisonChart(
+export interface ComparisonItem {
+  label: string;
+  total: number;
+  completed: number;
+}
+
+/** Draws a horizontal stacked-bar comparison (completed vs. open) across arbitrary items — employees or directions.
+ * Returns the y coordinate after the chart. */
+export function drawTaskComparisonChart(
   doc: PDFKit.PDFDocument,
-  employees: { employeeName: string; totalTasks: number; completedTasks: number }[],
+  items: ComparisonItem[],
   opts: { x: number; y: number; width: number; title: string }
 ): number {
   const { x, y, width, title } = opts;
-  doc.fontSize(9).fillColor("#333").text(title, x, y, { width });
-  let rowY = y + 16;
+  doc.fontSize(8).fillColor("#666").text(title, x, y, { width });
+  let rowY = y + 13;
 
-  if (employees.length === 0) {
-    doc.fontSize(8).fillColor("#999").text("Нет данных", x, rowY);
+  if (items.length === 0) {
+    doc.fontSize(7).fillColor("#999").text("Нет данных", x, rowY);
     doc.fillColor("#000");
-    return rowY + 16;
+    return rowY + 14;
   }
 
-  const labelWidth = 120;
-  const countWidth = 50;
+  const labelWidth = 110;
+  const countWidth = 44;
   const trackWidth = width - labelWidth - countWidth;
-  const barHeight = 10;
-  const rowGap = 6;
-  const maxValue = Math.max(...employees.map((e) => e.totalTasks), 1);
+  const barHeight = 8;
+  const rowGap = 4;
+  const maxValue = Math.max(...items.map((e) => e.total), 1);
 
-  for (const emp of employees) {
+  for (const item of items) {
     const trackX = x + labelWidth;
-    doc.fontSize(7.5).fillColor("#333").text(truncate(emp.employeeName, 20), x, rowY + 1, { width: labelWidth - 6 });
+    doc.fontSize(7).fillColor("#333").text(truncate(item.label, 18), x, rowY, { width: labelWidth - 6 });
 
     doc.rect(trackX, rowY, trackWidth, barHeight).fillColor("#E9ECEF").fill();
-    const totalWidth = (emp.totalTasks / maxValue) * trackWidth;
-    const completedWidth = (emp.completedTasks / maxValue) * trackWidth;
+    const totalWidth = (item.total / maxValue) * trackWidth;
+    const completedWidth = (item.completed / maxValue) * trackWidth;
     if (totalWidth > 0) doc.rect(trackX, rowY, totalWidth, barHeight).fillColor("#FFD8A8").fill();
     if (completedWidth > 0) doc.rect(trackX, rowY, completedWidth, barHeight).fillColor("#12B886").fill();
 
-    doc.fontSize(7).fillColor("#333").text(`${emp.completedTasks}/${emp.totalTasks}`, trackX + trackWidth + 4, rowY + 1, {
+    doc.fontSize(6.5).fillColor("#333").text(`${item.completed}/${item.total}`, trackX + trackWidth + 4, rowY, {
       width: countWidth - 4,
     });
 
@@ -137,7 +144,57 @@ export function drawEmployeeComparisonChart(
   }
 
   doc.fillColor("#000");
-  return rowY + 4;
+  return rowY + 3;
+}
+
+export interface DurationItem {
+  label: string;
+  avgHours: number | null;
+}
+
+/** Draws a horizontal bar chart comparing average task completion time across employees. Returns the y after the chart. */
+export function drawDurationChart(
+  doc: PDFKit.PDFDocument,
+  items: DurationItem[],
+  opts: { x: number; y: number; width: number; title: string }
+): number {
+  const { x, y, width, title } = opts;
+  doc.fontSize(8).fillColor("#666").text(title, x, y, { width });
+  let rowY = y + 13;
+
+  const withData = items.filter((i): i is { label: string; avgHours: number } => i.avgHours !== null);
+  if (withData.length === 0) {
+    doc.fontSize(7).fillColor("#999").text("Нет данных", x, rowY);
+    doc.fillColor("#000");
+    return rowY + 14;
+  }
+
+  const labelWidth = 110;
+  const valueWidth = 50;
+  const trackWidth = width - labelWidth - valueWidth;
+  const barHeight = 8;
+  const rowGap = 4;
+  const maxValue = Math.max(...withData.map((e) => e.avgHours), 1);
+
+  for (const item of items) {
+    const trackX = x + labelWidth;
+    doc.fontSize(7).fillColor("#333").text(truncate(item.label, 18), x, rowY, { width: labelWidth - 6 });
+    doc.rect(trackX, rowY, trackWidth, barHeight).fillColor("#E9ECEF").fill();
+
+    if (item.avgHours !== null) {
+      const barWidth = (item.avgHours / maxValue) * trackWidth;
+      if (barWidth > 0) doc.rect(trackX, rowY, barWidth, barHeight).fillColor("#4C6EF5").fill();
+      const label = item.avgHours < 24 ? `${item.avgHours.toFixed(1)}ч` : `${(item.avgHours / 24).toFixed(1)}д`;
+      doc.fontSize(6.5).fillColor("#333").text(label, trackX + trackWidth + 4, rowY, { width: valueWidth - 4 });
+    } else {
+      doc.fontSize(6.5).fillColor("#999").text("н/д", trackX + trackWidth + 4, rowY, { width: valueWidth - 4 });
+    }
+
+    rowY += barHeight + rowGap;
+  }
+
+  doc.fillColor("#000");
+  return rowY + 3;
 }
 
 function truncate(text: string, max: number): string {

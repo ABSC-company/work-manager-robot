@@ -30,7 +30,7 @@ export interface ProjectReportBlock {
 
 export interface CompanyReportData {
   companyName: string;
-  period: "DAILY" | "WEEKLY" | "MONTHLY";
+  period: "DAILY" | "WEEKLY" | "MONTHLY" | "CUSTOM";
   periodLabel: string;
   periodStart: Date;
   periodEnd: Date;
