@@ -61,12 +61,13 @@ export async function buildCompanyReportData(opts: {
       }
 
       let commits: CommitSummary[] = [];
-      if (githubToken && direction.githubRepo) {
-        commits = await fetchCommitsForPeriod(githubToken, {
-          repo: direction.githubRepo,
-          start: opts.periodStart,
-          end: opts.periodEnd,
-        });
+      if (githubToken && direction.githubRepos.length > 0) {
+        const perRepo = await Promise.all(
+          direction.githubRepos.map((repo) =>
+            fetchCommitsForPeriod(githubToken, { repo, start: opts.periodStart, end: opts.periodEnd })
+          )
+        );
+        commits = perRepo.flat();
       }
 
       const documentationText = await extractDocumentationText(direction.documentation, githubToken);

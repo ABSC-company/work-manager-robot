@@ -41,6 +41,17 @@ bot.use(createConversation(setRequiredApprovalsConversation, "setRequiredApprova
 bot.use(createConversation(addOccasionConversation, "addOccasion"));
 bot.use(createConversation(mapIdentityConversation, "mapIdentity"));
 
+bot.command("cancel", async (ctx) => {
+  const active = await ctx.conversation.active();
+  const names = Object.keys(active);
+  if (names.length === 0) {
+    await ctx.reply("Нет активного сценария для отмены.");
+    return;
+  }
+  await Promise.all(names.map((name) => ctx.conversation.exit(name)));
+  await ctx.reply("Сценарий отменён.");
+});
+
 bot.command("start", async (ctx) => {
   const id = String(ctx.from?.id ?? "");
   const admin = isSuperAdmin(id);
@@ -57,6 +68,8 @@ bot.command("start", async (ctx) => {
 bot.command("help", async (ctx) => {
   await ctx.reply(
     [
+      "/cancel — прервать любой текущий сценарий (создание/привязку и т.п.)",
+      "",
       "Команды супер-администратора:",
       "/newcompany — создать компанию",
       "",
@@ -70,7 +83,7 @@ bot.command("help", async (ctx) => {
       "/setgithub — привязать GitHub-организацию",
       "/addproject — создать проект",
       "/adddirection — создать направление в проекте",
-      "/linkdirection — привязать сотрудников/репозиторий/Jira/документацию к направлению",
+      "/linkdirection — привязать сотрудников/репозитории (можно несколько через запятую)/Jira/документацию к направлению",
       "/setreportconfig — настроить расписание отчёта (daily/weekly/monthly)",
       "/setapprovals — задать кол-во требуемых одобрений отчёта",
       "/setgroupchat — привязать текущий чат как групповой (для пересылки отчётов/напоминаний)",

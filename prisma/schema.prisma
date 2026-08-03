@@ -38,22 +38,22 @@ model CompanyAdmin {
   fullName   String?
   createdAt  DateTime @default(now())
 
-  company        Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   reportApprovals ReportApproval[]
 
   @@unique([companyId, telegramId])
 }
 
 model Employee {
-  id                String   @id @default(cuid())
-  companyId         String
-  telegramUsername  String? // without @
-  fullName          String
-  department        String?
-  position          String?
-  jiraAccountId     String? // resolved lazily by matching displayName/email in Jira
-  githubUsername    String?
-  createdAt         DateTime @default(now())
+  id               String   @id @default(cuid())
+  companyId        String
+  telegramUsername String? // without @
+  fullName         String
+  department       String?
+  position         String?
+  jiraAccountId    String? // resolved lazily by matching displayName/email in Jira
+  githubUsername   String?
+  createdAt        DateTime @default(now())
 
   company    Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
   directions DirectionEmployee[]
@@ -80,14 +80,14 @@ model Direction {
   id             String   @id @default(cuid())
   projectId      String
   name           String // backend, frontend, mobile, design, qa, devops, ...
-  githubRepo     String? // "owner/repo"
+  githubRepos    String[] @default([]) // "owner/repo", one or more
   jiraProjectKey String?
   jiraBoardIds   String[] @default([])
   createdAt      DateTime @default(now())
 
-  project        Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  employees      DirectionEmployee[]
-  documentation  Documentation[]
+  project       Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  employees     DirectionEmployee[]
+  documentation Documentation[]
 
   @@unique([projectId, name])
 }
@@ -149,9 +149,9 @@ model Report {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
-  company    Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  project    Project?         @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  approvals  ReportApproval[]
+  company   Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  project   Project?         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  approvals ReportApproval[]
 }
 
 model ReportApproval {
@@ -167,17 +167,17 @@ model ReportApproval {
 }
 
 model ReportSchedule {
-  id        String       @id @default(cuid())
-  companyId String
-  period    ReportPeriod
-  hour      Int          @default(19)
-  minute    Int          @default(0)
+  id                 String       @id @default(cuid())
+  companyId          String
+  period             ReportPeriod
+  hour               Int          @default(19)
+  minute             Int          @default(0)
   // WEEKLY: dayOfWeek 0-6 (0=Sunday), default Friday=5
-  dayOfWeek Int?         @default(5)
+  dayOfWeek          Int?         @default(5)
   // MONTHLY: days before last day of month, default 3
-  daysBeforeMonthEnd Int? @default(3)
-  enabled   Boolean      @default(true)
-  updatedAt DateTime     @updatedAt
+  daysBeforeMonthEnd Int?         @default(3)
+  enabled            Boolean      @default(true)
+  updatedAt          DateTime     @updatedAt
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
@@ -199,21 +199,21 @@ enum RecurrenceFrequency {
 }
 
 model Occasion {
-  id          String              @id @default(cuid())
-  companyId   String
-  title       String
-  description String?
-  type        OccasionType
-  scheduledAt DateTime? // for ONE_TIME
-  frequency   RecurrenceFrequency?
-  dayOfWeek   Int? // for WEEKLY
-  dayOfMonth  Int? // for MONTHLY_DAY
+  id                 String               @id @default(cuid())
+  companyId          String
+  title              String
+  description        String?
+  type               OccasionType
+  scheduledAt        DateTime? // for ONE_TIME
+  frequency          RecurrenceFrequency?
+  dayOfWeek          Int? // for WEEKLY
+  dayOfMonth         Int? // for MONTHLY_DAY
   daysBeforeMonthEnd Int? // for MONTHLY_BEFORE_END
-  hour        Int      @default(9)
-  minute      Int      @default(0)
-  active      Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  lastFiredAt DateTime?
+  hour               Int                  @default(9)
+  minute             Int                  @default(0)
+  active             Boolean              @default(true)
+  createdAt          DateTime             @default(now())
+  lastFiredAt        DateTime?
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 }
