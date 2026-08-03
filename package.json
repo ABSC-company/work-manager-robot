@@ -1,0 +1,42 @@
+{
+  "name": "manager-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Telegram-bot управляемый сервис для отслеживания активности Jira/GitHub и формирования отчётов",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate deploy",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "@grammyjs/conversations": "^2.0.1",
+    "@octokit/rest": "^21.0.2",
+    "@prisma/client": "^5.22.0",
+    "bullmq": "^5.28.0",
+    "dotenv": "^16.4.5",
+    "grammy": "^1.31.1",
+    "ioredis": "^5.4.1",
+    "jira.js": "^4.0.6",
+    "mammoth": "^1.8.0",
+    "pdfkit": "^0.15.1",
+    "pino": "^9.5.0",
+    "pino-pretty": "^13.0.0",
+    "prisma": "^5.22.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/pdfkit": "^0.13.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

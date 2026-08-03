@@ -1,0 +1,219 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Company ----------
+
+model Company {
+  id                String   @id @default(cuid())
+  name              String
+  githubOrg         String?
+  githubToken       String? // PAT with repo/read:org scope, encrypted at rest by app layer
+  jiraBaseUrl       String? // https://yourorg.atlassian.net
+  jiraEmail         String?
+  jiraApiToken      String? // encrypted at rest by app layer
+  timezone          String   @default("Asia/Tashkent")
+  requiredApprovals Int      @default(1)
+  groupChatId       String? // telegram chat id reports/reminders are forwarded to
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  admins    CompanyAdmin[]
+  employees Employee[]
+  projects  Project[]
+  reports   Report[]
+  schedules ReportSchedule[]
+  occasions Occasion[]
+}
+
+model CompanyAdmin {
+  id         String   @id @default(cuid())
+  companyId  String
+  telegramId String
+  fullName   String?
+  createdAt  DateTime @default(now())
+
+  company        Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  reportApprovals ReportApproval[]
+
+  @@unique([companyId, telegramId])
+}
+
+model Employee {
+  id                String   @id @default(cuid())
+  companyId         String
+  telegramUsername  String? // without @
+  fullName          String
+  department        String?
+  position          String?
+  jiraAccountId     String? // resolved lazily by matching displayName/email in Jira
+  githubUsername    String?
+  createdAt         DateTime @default(now())
+
+  company    Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  directions DirectionEmployee[]
+
+  @@unique([companyId, telegramUsername])
+}
+
+// ---------- Projects & Directions ----------
+
+model Project {
+  id        String   @id @default(cuid())
+  companyId String
+  name      String
+  createdAt DateTime @default(now())
+
+  company    Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  directions Direction[]
+  reports    Report[]
+
+  @@unique([companyId, name])
+}
+
+model Direction {
+  id             String   @id @default(cuid())
+  projectId      String
+  name           String // backend, frontend, mobile, design, qa, devops, ...
+  githubRepo     String? // "owner/repo"
+  jiraProjectKey String?
+  jiraBoardIds   String[] @default([])
+  createdAt      DateTime @default(now())
+
+  project        Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  employees      DirectionEmployee[]
+  documentation  Documentation[]
+
+  @@unique([projectId, name])
+}
+
+model DirectionEmployee {
+  id          String @id @default(cuid())
+  directionId String
+  employeeId  String
+
+  direction Direction @relation(fields: [directionId], references: [id], onDelete: Cascade)
+  employee  Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([directionId, employeeId])
+}
+
+enum DocumentationType {
+  GITHUB_REPO
+  FILE
+}
+
+model Documentation {
+  id          String            @id @default(cuid())
+  directionId String
+  type        DocumentationType
+  name        String
+  url         String? // for GITHUB_REPO or external link
+  filePath    String? // for FILE (.txt/.docx) stored on local filesystem
+  createdAt   DateTime          @default(now())
+
+  direction Direction @relation(fields: [directionId], references: [id], onDelete: Cascade)
+}
+
+// ---------- Reports ----------
+
+enum ReportPeriod {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+enum ReportStatus {
+  GENERATING
+  PENDING_APPROVAL
+  APPROVED
+  SENT
+  FAILED
+}
+
+model Report {
+  id          String       @id @default(cuid())
+  companyId   String
+  projectId   String? // null => cross-project summary report for the company
+  period      ReportPeriod
+  periodStart DateTime
+  periodEnd   DateTime
+  status      ReportStatus @default(GENERATING)
+  filePath    String? // generated PDF path on local filesystem
+  error       String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  company    Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  project    Project?         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  approvals  ReportApproval[]
+}
+
+model ReportApproval {
+  id             String   @id @default(cuid())
+  reportId       String
+  companyAdminId String
+  approvedAt     DateTime @default(now())
+
+  report       Report       @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  companyAdmin CompanyAdmin @relation(fields: [companyAdminId], references: [id], onDelete: Cascade)
+
+  @@unique([reportId, companyAdminId])
+}
+
+model ReportSchedule {
+  id        String       @id @default(cuid())
+  companyId String
+  period    ReportPeriod
+  hour      Int          @default(19)
+  minute    Int          @default(0)
+  // WEEKLY: dayOfWeek 0-6 (0=Sunday), default Friday=5
+  dayOfWeek Int?         @default(5)
+  // MONTHLY: days before last day of month, default 3
+  daysBeforeMonthEnd Int? @default(3)
+  enabled   Boolean      @default(true)
+  updatedAt DateTime     @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, period])
+}
+
+// ---------- Occasions (мероприятия) ----------
+
+enum OccasionType {
+  ONE_TIME
+  RECURRING
+}
+
+enum RecurrenceFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY_DAY
+  MONTHLY_BEFORE_END
+}
+
+model Occasion {
+  id          String              @id @default(cuid())
+  companyId   String
+  title       String
+  description String?
+  type        OccasionType
+  scheduledAt DateTime? // for ONE_TIME
+  frequency   RecurrenceFrequency?
+  dayOfWeek   Int? // for WEEKLY
+  dayOfMonth  Int? // for MONTHLY_DAY
+  daysBeforeMonthEnd Int? // for MONTHLY_BEFORE_END
+  hour        Int      @default(9)
+  minute      Int      @default(0)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  lastFiredAt DateTime?
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}

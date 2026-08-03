@@ -1,0 +1,8 @@
+node_modules
+dist
+.env
+storage/uploads/*
+storage/reports/*
+!storage/uploads/.gitkeep
+!storage/reports/.gitkeep
+*.log

@@ -1,0 +1,71 @@
+name: Build and deploy
+
+on:
+  push:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        working-directory: service
+        run: npm ci
+
+      - name: Type-check
+        working-directory: service
+        run: npm run lint
+
+      - name: Build
+        working-directory: service
+        run: npm run build
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: service
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to VDS over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VDS_HOST }}
+          username: ${{ secrets.VDS_USER }}
+          key: ${{ secrets.VDS_SSH_KEY }}
+          # VDS_DEPLOY_PATH must be a git checkout of this repo containing a .env
+          # with the runtime secrets (see service/.env.example) next to docker-compose.prod.yml.
+          script: |
+            set -e
+            cd ${{ secrets.VDS_DEPLOY_PATH }}
+            git pull --ff-only
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            export GITHUB_REPOSITORY=${{ github.repository }}
+            docker compose -f service/docker-compose.prod.yml --env-file service/.env pull app
+            docker compose -f service/docker-compose.prod.yml --env-file service/.env up -d --remove-orphans
+            docker image prune -f
