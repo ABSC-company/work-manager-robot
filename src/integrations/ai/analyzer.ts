@@ -9,6 +9,13 @@ export interface IssueWithCommits {
   commits: CommitSummary[];
 }
 
+export interface IdleSummaryInput {
+  totalDays: number;
+  totalHours: number;
+  noBacklogDays: number;
+  noActivityDays: number;
+}
+
 export interface EmployeeIssueAnalysis {
   issueKey: string;
   workDoneNote: string;
@@ -17,21 +24,35 @@ export interface EmployeeIssueAnalysis {
 
 export interface EmployeeActivityAnalysis {
   summary: string; // short overview paragraph for the employee, this period
+  efficiencyAssessment: string; // judgment combining Jira metrics, GitHub activity and idle days
+  estimatedWorkedHours: number | null; // AI's best estimate of hours actually worked within the period
   perIssue: EmployeeIssueAnalysis[];
 }
 
+const FALLBACK_EFFICIENCY = "Автоматическая оценка эффективности временно недоступна.";
+
 /**
- * Uses Claude to turn raw Jira issue + matched GitHub commit data into a human-readable
- * activity summary, optionally judging alignment with direction documentation.
+ * Uses Claude to turn raw Jira issue + matched/unmatched GitHub commit data + recorded idle days into a
+ * human-readable activity summary and an efficiency assessment, optionally judging alignment with
+ * direction documentation.
  */
 export async function analyzeEmployeeActivity(input: {
   employeeName: string;
   periodLabel: string; // "day of 2026-07-30", "week of 2026-07-27..08-02", "month of July 2026"
+  periodHours: number; // wall-clock length of the report period, in hours
   issues: IssueWithCommits[];
+  unmatchedCommits: CommitSummary[]; // commits that couldn't be tied to a specific Jira issue by key
+  idleSummary: IdleSummaryInput;
   documentationText: string;
 }): Promise<EmployeeActivityAnalysis> {
-  if (input.issues.length === 0) {
-    return { summary: `${input.employeeName}: активности по задачам за период не зафиксировано.`, perIssue: [] };
+  const hasAnyData = input.issues.length > 0 || input.unmatchedCommits.length > 0 || input.idleSummary.totalDays > 0;
+  if (!hasAnyData) {
+    return {
+      summary: `${input.employeeName}: активности по задачам за период не зафиксировано.`,
+      efficiencyAssessment: "Недостаточно данных (нет задач, коммитов или записей о простоях) для оценки эффективности за этот период.",
+      estimatedWorkedHours: null,
+      perIssue: [],
+    };
   }
 
   const issuesPayload = input.issues.map(({ issue, commits }) => ({
@@ -42,7 +63,9 @@ export async function analyzeEmployeeActivity(input: {
     commits: commits.map((c) => ({ message: c.message, date: c.date.toISOString() })),
   }));
 
-  const prompt = `Ты — ассистент менеджера, который готовит отчёт по активности сотрудника "${input.employeeName}" за период: ${input.periodLabel}.
+  const unmatchedCommitsPayload = input.unmatchedCommits.map((c) => ({ message: c.message, date: c.date.toISOString() }));
+
+  const prompt = `Ты — ассистент менеджера, который готовит отчёт по активности сотрудника "${input.employeeName}" за период: ${input.periodLabel} (~${Math.round(input.periodHours)} ч по календарю).
 
 Ниже приведены задачи Jira этого сотрудника (со сменами статусов) и связанные коммиты GitHub за период.
 ${input.documentationText ? `Документация направления (для проверки соответствия работы):\n${input.documentationText}\n` : "Документация направления не предоставлена."}
@@ -50,14 +73,24 @@ ${input.documentationText ? `Документация направления (д
 Задачи (JSON):
 ${JSON.stringify(issuesPayload, null, 2)}
 
+Коммиты, не привязанные к конкретной задаче (JSON):
+${JSON.stringify(unmatchedCommitsPayload, null, 2)}
+
+Зафиксированные простои за период (автоматически определены по отсутствию активности в Jira/GitHub за календарный день):
+- всего дней простоя: ${input.idleSummary.totalDays} (~${input.idleSummary.totalHours} ч)
+- из них дней без задач в беклоге (простой не по вине сотрудника): ${input.idleSummary.noBacklogDays}
+- из них дней с задачами в беклоге, но без видимой активности (причина не зафиксирована — отпуск/больничный/работа вне систем/бездействие): ${input.idleSummary.noActivityDays}
+
 Ответь СТРОГО в формате JSON без markdown-обрамления:
 {
   "summary": "краткий абзац (3-5 предложений) на русском о том, что сотрудник делал в этот период, какие задачи закрыл/продвинул",
+  "efficiencyAssessment": "2-4 предложения на русском: оценка эффективности сотрудника за период на основе ВСЕХ данных (задачи Jira, коммиты GitHub, простои). Если активность низкая — укажи наиболее вероятную причину: если есть дни без задач в беклоге — так и скажи; если есть дни с задачами но без активности — явно скажи, что причина не зафиксирована системой и это предположение (например, отпуск/больничный/работа вне отслеживаемых систем)",
+  "estimatedWorkedHours": число (приблизительная оценка часов, реально отработанных сотрудником в течение периода, с учётом простоев; не больше длины периода),
   "perIssue": [
     { "issueKey": "KEY-1", "workDoneNote": "1-2 предложения: что конкретно сделано в GitHub по задаче (или 'коммиты не найдены')", "followsDocumentation": true | false | null }
   ]
 }
-followsDocumentation должен быть null, если документации нет или нет коммитов для сравнения.`;
+followsDocumentation должен быть null, если документации нет или нет коммитов для сравнения. perIssue может быть пустым массивом, если задач не было.`;
 
   try {
     const response = await anthropic.messages.create({
@@ -79,7 +112,9 @@ followsDocumentation должен быть null, если документаци
   } catch (err) {
     logger.error({ err, employee: input.employeeName }, "AI analysis failed, falling back to raw summary");
     return {
-      summary: `${input.employeeName}: за период обработано ${input.issues.length} задач(и). Автоматический AI-анализ временно недоступен.`,
+      summary: `${input.employeeName}: за период обработано ${input.issues.length} задач(и), ${input.unmatchedCommits.length} коммит(ов) без привязки к задаче. Автоматический AI-анализ временно недоступен.`,
+      efficiencyAssessment: FALLBACK_EFFICIENCY,
+      estimatedWorkedHours: null,
       perIssue: input.issues.map(({ issue }) => ({
         issueKey: issue.key,
         workDoneNote: "AI-анализ недоступен",

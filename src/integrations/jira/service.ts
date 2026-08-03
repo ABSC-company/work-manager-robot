@@ -113,6 +113,22 @@ export async function fetchAssigneeBacklog(
   }
 }
 
+/** Cheap check for whether an assignee had any Jira activity (status/field updates) in [start, end] — used by the daily idle tracker. */
+export async function hasJiraActivity(
+  creds: JiraCredentials,
+  opts: { assigneeAccountId: string; start: Date; end: Date }
+): Promise<boolean> {
+  const client = createJiraClient(creds);
+  const jql = `assignee = "${opts.assigneeAccountId}" AND updated >= "${formatJql(opts.start)}" AND updated <= "${formatJql(opts.end)}"`;
+  try {
+    const result = await client.issueSearch.countIssues({ jql });
+    return (result.count ?? 0) > 0;
+  } catch (err) {
+    logger.warn({ err, assigneeAccountId: opts.assigneeAccountId }, "failed to check jira activity");
+    return false;
+  }
+}
+
 /** Resolves a Jira accountId by matching an employee's full name or username against Jira user search. */
 export async function resolveAccountIdByName(
   creds: JiraCredentials,

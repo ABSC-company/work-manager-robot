@@ -4,6 +4,7 @@ import { config } from "../config";
 import { logger } from "../utils/logger";
 import { checkReportSchedules } from "./reportScheduler";
 import { checkOccasions } from "./occasionScheduler";
+import { checkIdleTracking } from "./idleScheduler";
 
 const connection = new IORedis(config.redis.url, { maxRetriesPerRequest: null });
 
@@ -28,6 +29,7 @@ export async function startScheduler(): Promise<Worker> {
       const now = new Date();
       await checkReportSchedules(now);
       await checkOccasions(now);
+      await checkIdleTracking(now);
     },
     { connection }
   );

@@ -4,6 +4,8 @@ import path from "node:path";
 import type { CompanyReportData, EmployeeReportBlock, DirectionReportBlock } from "./types";
 import type { AggregateMetrics } from "./metrics";
 import { drawStatusBarChart, drawCompletionDonut, drawTaskComparisonChart, drawDurationChart } from "./charts";
+import { drawTable } from "./table";
+import type { TableColumn } from "./table";
 
 const PAGE_MARGIN = 40;
 const PAGE_WIDTH = 595.28; // A4
@@ -89,12 +91,14 @@ function resetX(doc: PDFKit.PDFDocument): void {
   doc.x = PAGE_MARGIN;
 }
 
-function ensureSpace(doc: PDFKit.PDFDocument, height: number): void {
+function ensureSpace(doc: PDFKit.PDFDocument, height: number): boolean {
   const bottom = doc.page.height - doc.page.margins.bottom;
   if (doc.y + height > bottom) {
     doc.addPage();
     resetX(doc);
+    return true;
   }
+  return false;
 }
 
 /** Thin horizontal rule used to visually separate sections that would otherwise sit flush against each other. */
@@ -150,7 +154,7 @@ function renderMetricsTable(doc: PDFKit.PDFDocument, metrics: AggregateMetrics):
   doc.moveDown(0.2);
   resetX(doc);
   doc.text(
-    `Среднее время выполнения задачи: ${formatHours(metrics.avgTaskDurationHours)}   Средний интервал между задачами: ${formatHours(
+    `Среднее время выполнения задачи: ${formatHours(metrics.avgTaskDurationHours)}   Средний простой между задачами: ${formatHours(
       metrics.avgGapBetweenTasksHours
     )}`,
     { width: USABLE_WIDTH }
@@ -243,6 +247,23 @@ function renderEmployeeBlock(doc: PDFKit.PDFDocument, employee: EmployeeReportBl
 
   sectionLabel(doc, "Итог по периоду");
   doc.fontSize(9).fillColor("#333").text(employee.aiSummary, { width: USABLE_WIDTH, align: "justify" });
+  doc.fillColor("#000").moveDown(0.5);
+  resetX(doc);
+
+  sectionLabel(doc, "Простои");
+  doc.fontSize(9).fillColor("#333").text(formatIdleSummary(employee.idleSummary), { width: USABLE_WIDTH });
+  doc.fillColor("#000").moveDown(0.5);
+  resetX(doc);
+
+  sectionLabel(doc, "Оценка эффективности (ИИ)");
+  const workedLine =
+    employee.estimatedWorkedHours !== null
+      ? `Оценочно отработано: ${formatHours(employee.estimatedWorkedHours)} из ${formatHours(employee.periodHours)} периода.`
+      : `Длительность периода: ${formatHours(employee.periodHours)}.`;
+  doc.fontSize(9).fillColor("#333").text(workedLine, { width: USABLE_WIDTH });
+  doc.moveDown(0.2);
+  resetX(doc);
+  doc.fontSize(9).fillColor("#333").text(employee.efficiencyAssessment, { width: USABLE_WIDTH, align: "justify" });
   doc.fillColor("#000").moveDown(0.6);
   resetX(doc);
 
@@ -267,27 +288,74 @@ function renderEmployeeBlock(doc: PDFKit.PDFDocument, employee: EmployeeReportBl
 
   if (employee.issues.length > 0) {
     sectionLabel(doc, "Задачи");
-    for (const issue of employee.issues) {
-      ensureSpace(doc, 44);
-      resetX(doc);
-      doc.fontSize(9).fillColor("#000").text(`• ${issue.key}: ${issue.summary} [${issue.currentStatus}]`, { width: USABLE_WIDTH });
-      const history = issue.statusHistory.map((t) => `${t.from ?? "—"}→${t.to} (${t.at.toISOString().slice(0, 16)})`).join("; ");
-      if (history) doc.fontSize(8).fillColor("#666").text(`  История: ${history}`, { width: USABLE_WIDTH - 10 });
-      if (issue.workDoneNote) {
-        const docLabel =
-          issue.followsDocumentation === true
-            ? " [соответствует документации]"
-            : issue.followsDocumentation === false
-              ? " [расхождение с документацией]"
-              : "";
-        doc.fontSize(8).fillColor("#666").text(`  GitHub: ${issue.workDoneNote}${docLabel}`, { width: USABLE_WIDTH - 10 });
-      }
-      doc.moveDown(0.3);
-      resetX(doc);
-    }
+    resetX(doc);
+
+    const columns: TableColumn<EmployeeReportBlock["issues"][number]>[] = [
+      {
+        header: "Задача",
+        width: 115,
+        cell: (issue) => `${issue.key}: ${truncateText(issue.summary, 55)}\n[${issue.currentStatus}]`,
+      },
+      {
+        header: "Переходы статусов",
+        width: 120,
+        cell: (issue) =>
+          issue.statusHistory.length > 0
+            ? issue.statusHistory
+                .map((t) => `${t.from ?? "—"}→${t.to} (${t.at.toISOString().slice(0, 16).replace("T", " ")})`)
+                .join("\n")
+            : "—",
+      },
+      {
+        header: "Время",
+        width: 42,
+        cell: (issue) => (issue.durationHours !== null ? formatHours(issue.durationHours) : "в работе"),
+      },
+      {
+        header: "Коммиты",
+        width: 78,
+        cell: (issue) =>
+          issue.commits.length > 0
+            ? issue.commits.map((c) => truncateText(c.message.split("\n")[0], 40)).join("\n")
+            : "—",
+      },
+      {
+        header: "Выжимка",
+        width: USABLE_WIDTH - (115 + 120 + 42 + 78),
+        cell: (issue) => {
+          const docLabel =
+            issue.followsDocumentation === true
+              ? " [соответствует документации]"
+              : issue.followsDocumentation === false
+                ? " [расхождение с документацией]"
+                : "";
+          return `${issue.workDoneNote ?? "—"}${docLabel}`;
+        },
+      },
+    ];
+
+    const y = drawTable(doc, columns, employee.issues, {
+      x: PAGE_MARGIN,
+      y: doc.y,
+      fontRegular: FONT_REGULAR,
+      fontBold: FONT_BOLD,
+      ensureSpace: (h) => ensureSpace(doc, h),
+    });
+    doc.y = y;
+    resetX(doc);
+    doc.moveDown(0.5);
+    resetX(doc);
   }
 
   doc.fillColor("#000");
+}
+
+function formatIdleSummary(idle: EmployeeReportBlock["idleSummary"]): string {
+  if (idle.totalDays === 0) return "За период простоев не зафиксировано.";
+  const parts = [`Всего дней простоя: ${idle.totalDays} (~${formatHours(idle.totalHours)}).`];
+  if (idle.noBacklogDays > 0) parts.push(`Из них без задач в беклоге: ${idle.noBacklogDays}.`);
+  if (idle.noActivityDays > 0) parts.push(`Из них с задачами в беклоге, но без видимой активности: ${idle.noActivityDays}.`);
+  return parts.join(" ");
 }
 
 function formatHours(hours: number | null): string {

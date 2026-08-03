@@ -7,8 +7,8 @@ import type { CommitSummary } from "../integrations/github/service";
 import { extractDocumentationText } from "../integrations/ai/documentation";
 import { analyzeEmployeeActivity } from "../integrations/ai/analyzer";
 import { matchCommitsToIssues } from "../integrations/ai/match";
-import { computeEmployeeMetrics, aggregateMetrics } from "./metrics";
-import type { CompanyReportData, DirectionReportBlock, ProjectReportBlock, EmployeeReportBlock } from "./types";
+import { computeEmployeeMetrics, aggregateMetrics, findDoneTimestamp } from "./metrics";
+import type { CompanyReportData, DirectionReportBlock, ProjectReportBlock, EmployeeReportBlock, IdleSummary } from "./types";
 import type { ReportPeriod } from "@prisma/client";
 
 export async function buildCompanyReportData(opts: {
@@ -44,6 +44,7 @@ export async function buildCompanyReportData(opts: {
         }
       : null;
   const githubToken = company.githubToken ? decryptSecret(company.githubToken) : null;
+  const periodHours = Math.max((opts.periodEnd.getTime() - opts.periodStart.getTime()) / (1000 * 60 * 60), 0);
 
   const projectBlocks: ProjectReportBlock[] = [];
 
@@ -99,17 +100,24 @@ export async function buildCompanyReportData(opts: {
           : [];
 
         const issuesWithCommits = matchCommitsToIssues(employeeIssues, employeeCommits);
+        const matchedCommitUrls = new Set(issuesWithCommits.flatMap((i) => i.commits.map((c) => c.url)));
+        const unmatchedCommits = employeeCommits.filter((c) => !matchedCommitUrls.has(c.url));
 
         const metrics = computeEmployeeMetrics(employeeIssues, backlog);
+        const idleSummary = await computeIdleSummary(employee.id, opts.periodStart, opts.periodEnd);
 
         const analysis = await analyzeEmployeeActivity({
           employeeName: employee.fullName,
           periodLabel: formatPeriodLabel(opts.period, opts.periodStart, opts.periodEnd),
+          periodHours,
           issues: issuesWithCommits,
+          unmatchedCommits,
+          idleSummary,
           documentationText,
         });
 
         const noteByKey = new Map(analysis.perIssue.map((n) => [n.issueKey, n]));
+        const commitsByIssueKey = new Map(issuesWithCommits.map((i) => [i.issue.key, i.commits]));
 
         employeeBlocks.push({
           employeeName: employee.fullName,
@@ -117,12 +125,18 @@ export async function buildCompanyReportData(opts: {
           position: employee.position,
           metrics,
           aiSummary: analysis.summary,
+          efficiencyAssessment: analysis.efficiencyAssessment,
+          estimatedWorkedHours: analysis.estimatedWorkedHours,
+          periodHours,
+          idleSummary,
           commits: employeeCommits.map((c) => ({ message: c.message, date: c.date, url: c.url })),
           issues: employeeIssues.map((issue) => ({
             key: issue.key,
             summary: issue.summary,
             currentStatus: issue.currentStatus,
             statusHistory: issue.statusHistory,
+            durationHours: issueDurationHours(issue),
+            commits: (commitsByIssueKey.get(issue.key) ?? []).map((c) => ({ message: c.message, date: c.date, url: c.url })),
             workDoneNote: noteByKey.get(issue.key)?.workDoneNote ?? null,
             followsDocumentation: noteByKey.get(issue.key)?.followsDocumentation ?? null,
           })),
@@ -151,6 +165,26 @@ export async function buildCompanyReportData(opts: {
     periodEnd: opts.periodEnd,
     projects: projectBlocks,
     overallMetrics: aggregateMetrics(projectBlocks.flatMap((p) => p.directions.flatMap((d) => d.employees.map((e) => e.metrics)))),
+  };
+}
+
+/** Time from issue creation to completion, in hours. Null if the issue isn't done (yet). */
+function issueDurationHours(issue: JiraIssueSummary): number | null {
+  const done = findDoneTimestamp(issue);
+  if (!done) return null;
+  const hours = (done.getTime() - issue.created.getTime()) / (1000 * 60 * 60);
+  return hours >= 0 ? hours : null;
+}
+
+async function computeIdleSummary(employeeId: string, periodStart: Date, periodEnd: Date): Promise<IdleSummary> {
+  const rows = await prisma.idlePeriod.findMany({
+    where: { employeeId, date: { gte: periodStart, lte: periodEnd } },
+  });
+  return {
+    totalDays: rows.length,
+    totalHours: rows.reduce((sum, r) => sum + r.hours, 0),
+    noBacklogDays: rows.filter((r) => r.reason === "NO_BACKLOG_TASKS").length,
+    noActivityDays: rows.filter((r) => r.reason === "NO_ACTIVITY").length,
   };
 }
 

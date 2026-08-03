@@ -17,20 +17,15 @@ export async function checkReportSchedules(now: Date): Promise<void> {
     if (schedule.period === "WEEKLY" && parts.weekday !== (schedule.dayOfWeek ?? 5)) continue;
     if (schedule.period === "MONTHLY" && !isDaysBeforeMonthEnd(now, tz, schedule.daysBeforeMonthEnd ?? 3)) continue;
 
+    // Dedupe against THIS schedule's own last run, not against the Report table — a manual /report
+    // run for the same period earlier that day must not suppress the automatic send.
     const dayStart = startOfDayInZone(now, tz);
-    const alreadyGenerated = await prisma.report.findFirst({
-      where: {
-        companyId: schedule.companyId,
-        period: schedule.period,
-        projectId: null,
-        createdAt: { gte: dayStart },
-      },
-    });
-    if (alreadyGenerated) continue;
+    if (schedule.lastRunAt && schedule.lastRunAt >= dayStart) continue;
 
     try {
       const reportId = await generateCompanyReport(schedule.companyId, schedule.period, now);
       await sendReportForApproval(reportId);
+      await prisma.reportSchedule.update({ where: { id: schedule.id }, data: { lastRunAt: now } });
     } catch (err) {
       logger.error({ err, companyId: schedule.companyId, period: schedule.period }, "scheduled report failed");
     }

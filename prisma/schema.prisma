@@ -55,10 +55,33 @@ model Employee {
   githubUsername   String?
   createdAt        DateTime @default(now())
 
-  company    Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  directions DirectionEmployee[]
+  company     Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  directions  DirectionEmployee[]
+  idlePeriods IdlePeriod[]
 
   @@unique([companyId, telegramUsername])
+}
+
+// ---------- Idle tracking ----------
+
+enum IdleReason {
+  NO_BACKLOG_TASKS // employee had no assignable tasks in the backlog that day
+  NO_ACTIVITY // employee had backlog tasks but no Jira/GitHub activity was detected that day
+}
+
+// One row per employee per calendar day with zero detected Jira/GitHub activity, recorded by the daily idle-tracking job.
+model IdlePeriod {
+  id         String     @id @default(cuid())
+  employeeId String
+  date       DateTime // UTC midnight of the local (company timezone) calendar day this row covers
+  hours      Float // estimated idle hours for that day (assumed full working day when no activity is detected)
+  reason     IdleReason
+  note       String?
+  createdAt  DateTime   @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, date])
 }
 
 // ---------- Projects & Directions ----------
@@ -178,6 +201,7 @@ model ReportSchedule {
   // MONTHLY: days before last day of month, default 3
   daysBeforeMonthEnd Int?         @default(3)
   enabled            Boolean      @default(true)
+  lastRunAt          DateTime? // last time THIS schedule fired a report; manual /report runs don't touch this
   updatedAt          DateTime     @updatedAt
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)

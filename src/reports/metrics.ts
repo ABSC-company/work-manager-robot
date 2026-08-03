@@ -12,7 +12,7 @@ export interface EmployeeMetrics {
 }
 
 /** Finds when an issue reached a "done" status, based on its status history. Falls back to `updated` if already done but history is empty. */
-function findDoneTimestamp(issue: JiraIssueSummary): Date | null {
+export function findDoneTimestamp(issue: JiraIssueSummary): Date | null {
   if (issue.statusCategory !== "done") return null;
   // last transition in history should be the one that moved it to done
   const last = issue.statusHistory[issue.statusHistory.length - 1];
