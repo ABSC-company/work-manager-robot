@@ -3,7 +3,7 @@ import type { MyContext } from "../instance";
 import { prisma } from "../../db/prisma";
 
 export async function addProjectConversation(conversation: Conversation<MyContext, MyContext>, ctx: MyContext): Promise<void> {
-  const companyId = ctx.session.activeCompanyId!;
+  const companyId = (await conversation.external((ctx) => ctx.session.activeCompanyId))!;
 
   await ctx.reply("Введите название проекта:");
   const nameMsg = await conversation.waitFor("message:text");
@@ -15,7 +15,7 @@ export async function addProjectConversation(conversation: Conversation<MyContex
 }
 
 export async function addDirectionConversation(conversation: Conversation<MyContext, MyContext>, ctx: MyContext): Promise<void> {
-  const companyId = ctx.session.activeCompanyId!;
+  const companyId = (await conversation.external((ctx) => ctx.session.activeCompanyId))!;
 
   const projects = await conversation.external(() => prisma.project.findMany({ where: { companyId } }));
   if (projects.length === 0) {

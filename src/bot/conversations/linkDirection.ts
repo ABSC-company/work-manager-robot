@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import { config } from "../../config";
 
 export async function linkDirectionConversation(conversation: Conversation<MyContext, MyContext>, ctx: MyContext): Promise<void> {
-  const companyId = ctx.session.activeCompanyId!;
+  const companyId = (await conversation.external((ctx) => ctx.session.activeCompanyId))!;
 
   const directions = await conversation.external(() =>
     prisma.direction.findMany({ where: { project: { companyId } }, include: { project: true } })

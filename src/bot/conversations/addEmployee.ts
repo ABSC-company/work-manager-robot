@@ -3,7 +3,7 @@ import type { MyContext } from "../instance";
 import { prisma } from "../../db/prisma";
 
 export async function addEmployeeConversation(conversation: Conversation<MyContext, MyContext>, ctx: MyContext): Promise<void> {
-  const companyId = ctx.session.activeCompanyId!;
+  const companyId = (await conversation.external((ctx) => ctx.session.activeCompanyId))!;
 
   await ctx.reply("Введите @username сотрудника в Telegram (без @), либо '-' если отсутствует:");
   const usernameMsg = await conversation.waitFor("message:text");

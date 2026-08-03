@@ -4,7 +4,7 @@ import { prisma } from "../../db/prisma";
 import { encryptSecret } from "../../utils/crypto";
 
 export async function setJiraConversation(conversation: Conversation<MyContext, MyContext>, ctx: MyContext): Promise<void> {
-  const companyId = ctx.session.activeCompanyId!;
+  const companyId = (await conversation.external((ctx) => ctx.session.activeCompanyId))!;
 
   await ctx.reply("Введите базовый URL Jira (например https://yourorg.atlassian.net):");
   const urlMsg = await conversation.waitFor("message:text");
@@ -30,7 +30,7 @@ export async function setJiraConversation(conversation: Conversation<MyContext, 
 }
 
 export async function setGithubConversation(conversation: Conversation<MyContext, MyContext>, ctx: MyContext): Promise<void> {
-  const companyId = ctx.session.activeCompanyId!;
+  const companyId = (await conversation.external((ctx) => ctx.session.activeCompanyId))!;
 
   await ctx.reply("Введите название GitHub организации (например my-org):");
   const orgMsg = await conversation.waitFor("message:text");

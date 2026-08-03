@@ -4,7 +4,7 @@ import { prisma } from "../../db/prisma";
 import type { ReportPeriod } from "@prisma/client";
 
 export async function setReportConfigConversation(conversation: Conversation<MyContext, MyContext>, ctx: MyContext): Promise<void> {
-  const companyId = ctx.session.activeCompanyId!;
+  const companyId = (await conversation.external((ctx) => ctx.session.activeCompanyId))!;
 
   await ctx.reply("Какой отчёт настроить? Введите: daily, weekly или monthly");
   const periodMsg = await conversation.waitFor("message:text");
@@ -55,7 +55,7 @@ export async function setReportConfigConversation(conversation: Conversation<MyC
 }
 
 export async function setRequiredApprovalsConversation(conversation: Conversation<MyContext, MyContext>, ctx: MyContext): Promise<void> {
-  const companyId = ctx.session.activeCompanyId!;
+  const companyId = (await conversation.external((ctx) => ctx.session.activeCompanyId))!;
 
   const admins = await conversation.external(() => prisma.companyAdmin.count({ where: { companyId } }));
   await ctx.reply(`В компании ${admins} администратор(ов). Введите необходимое количество одобрений для пересылки отчёта в группу:`);

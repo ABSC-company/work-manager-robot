@@ -5,7 +5,7 @@ import { decryptSecret } from "../../utils/crypto";
 import { searchJiraUsers } from "../../integrations/jira/service";
 
 export async function mapIdentityConversation(conversation: Conversation<MyContext, MyContext>, ctx: MyContext): Promise<void> {
-  const companyId = ctx.session.activeCompanyId!;
+  const companyId = (await conversation.external((ctx) => ctx.session.activeCompanyId))!;
 
   const employees = await conversation.external(() => prisma.employee.findMany({ where: { companyId } }));
   if (employees.length === 0) {

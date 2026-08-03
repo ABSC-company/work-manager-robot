@@ -27,7 +27,9 @@ export async function newCompanyConversation(conversation: Conversation<MyContex
     })
   );
 
-  ctx.session.activeCompanyId = company.id;
+  await conversation.external((ctx) => {
+    ctx.session.activeCompanyId = company.id;
+  });
 
   await ctx.reply(
     `Компания "${company.name}" создана (id: ${company.id}).\n` +

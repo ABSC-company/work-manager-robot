@@ -4,7 +4,7 @@ import { prisma } from "../../db/prisma";
 import type { RecurrenceFrequency } from "@prisma/client";
 
 export async function addOccasionConversation(conversation: Conversation<MyContext, MyContext>, ctx: MyContext): Promise<void> {
-  const companyId = ctx.session.activeCompanyId!;
+  const companyId = (await conversation.external((ctx) => ctx.session.activeCompanyId))!;
 
   await ctx.reply("Введите название мероприятия:");
   const titleMsg = await conversation.waitFor("message:text");
