@@ -96,6 +96,50 @@ function drawPieSlice(
   doc.closePath().fillColor(color).fill();
 }
 
+/** Draws a horizontal stacked-bar comparison of completed vs. open tasks per employee. Returns the y coordinate after the chart. */
+export function drawEmployeeComparisonChart(
+  doc: PDFKit.PDFDocument,
+  employees: { employeeName: string; totalTasks: number; completedTasks: number }[],
+  opts: { x: number; y: number; width: number; title: string }
+): number {
+  const { x, y, width, title } = opts;
+  doc.fontSize(9).fillColor("#333").text(title, x, y, { width });
+  let rowY = y + 16;
+
+  if (employees.length === 0) {
+    doc.fontSize(8).fillColor("#999").text("Нет данных", x, rowY);
+    doc.fillColor("#000");
+    return rowY + 16;
+  }
+
+  const labelWidth = 120;
+  const countWidth = 50;
+  const trackWidth = width - labelWidth - countWidth;
+  const barHeight = 10;
+  const rowGap = 6;
+  const maxValue = Math.max(...employees.map((e) => e.totalTasks), 1);
+
+  for (const emp of employees) {
+    const trackX = x + labelWidth;
+    doc.fontSize(7.5).fillColor("#333").text(truncate(emp.employeeName, 20), x, rowY + 1, { width: labelWidth - 6 });
+
+    doc.rect(trackX, rowY, trackWidth, barHeight).fillColor("#E9ECEF").fill();
+    const totalWidth = (emp.totalTasks / maxValue) * trackWidth;
+    const completedWidth = (emp.completedTasks / maxValue) * trackWidth;
+    if (totalWidth > 0) doc.rect(trackX, rowY, totalWidth, barHeight).fillColor("#FFD8A8").fill();
+    if (completedWidth > 0) doc.rect(trackX, rowY, completedWidth, barHeight).fillColor("#12B886").fill();
+
+    doc.fontSize(7).fillColor("#333").text(`${emp.completedTasks}/${emp.totalTasks}`, trackX + trackWidth + 4, rowY + 1, {
+      width: countWidth - 4,
+    });
+
+    rowY += barHeight + rowGap;
+  }
+
+  doc.fillColor("#000");
+  return rowY + 4;
+}
+
 function truncate(text: string, max: number): string {
   return text.length > max ? text.slice(0, max - 1) + "…" : text;
 }
