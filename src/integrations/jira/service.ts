@@ -41,7 +41,7 @@ export async function fetchIssuesForPeriod(
       nextPageToken,
       maxResults,
       expand: "changelog",
-      fields: ["summary", "assignee", "status", "statuscategory", "created", "updated"],
+      fields: ["summary", "assignee", "status", "created", "updated"],
     });
 
     for (const issue of page.issues ?? []) {
