@@ -9,13 +9,26 @@ import { fetchCommitsForPeriod } from "../integrations/github/service";
 const IDLE_CHECK_HOUR = 0;
 const IDLE_CHECK_MINUTE = 30;
 
+type EvalResult = "recorded" | "had_activity" | "already_recorded" | "no_directions";
+export type IdleTrackingTally = Record<EvalResult, number>;
+
+const emptyTally = (): IdleTrackingTally => ({ recorded: 0, had_activity: 0, already_recorded: 0, no_directions: 0 });
+
+type CompanyWithEmployees = Awaited<ReturnType<typeof loadCompany>>;
+
+function loadCompany(companyId: string) {
+  return prisma.company.findUniqueOrThrow({
+    where: { id: companyId },
+    include: { employees: { include: { directions: { include: { direction: true } } } } },
+  });
+}
+
 /** For each employee with no detected Jira/GitHub activity yesterday, records a persistent IdlePeriod row
- * with an inferred reason ("no backlog tasks" vs. "had tasks but did nothing detectable"). */
+ * with an inferred reason ("no backlog tasks" vs. "had tasks but did nothing detectable"). Runs once per
+ * company per day, at IDLE_CHECK_HOUR:IDLE_CHECK_MINUTE in the company's own timezone. */
 export async function checkIdleTracking(now: Date): Promise<void> {
   const companies = await prisma.company.findMany({
-    include: {
-      employees: { include: { directions: { include: { direction: true } } } },
-    },
+    include: { employees: { include: { directions: { include: { direction: true } } } } },
   });
 
   for (const company of companies) {
@@ -27,20 +40,43 @@ export async function checkIdleTracking(now: Date): Promise<void> {
     const dayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
     const dayEnd = todayStart;
 
-    const jiraCreds =
-      company.jiraBaseUrl && company.jiraEmail && company.jiraApiToken
-        ? { baseUrl: company.jiraBaseUrl, email: company.jiraEmail, apiToken: decryptSecret(company.jiraApiToken) }
-        : null;
-    const githubToken = company.githubToken ? decryptSecret(company.githubToken) : null;
+    const tally = await evaluateCompanyDay(company, dayStart, dayEnd);
+    logger.info({ companyId: company.id, day: dayStart.toISOString().slice(0, 10), ...tally }, "idle tracking: scheduled run done");
+  }
+}
 
-    for (const employee of company.employees) {
-      try {
-        await evaluateEmployeeDay(employee, { jiraCreds, githubToken, dayStart, dayEnd });
-      } catch (err) {
-        logger.error({ err, employeeId: employee.id }, "idle tracking failed for employee");
-      }
+/** Manual trigger (e.g. an admin bot command) that evaluates a specific company's PREVIOUS calendar day
+ * right now, bypassing the once-a-day time gate — useful to verify the feature without waiting for midnight. */
+export async function runIdleTrackingNow(companyId: string): Promise<IdleTrackingTally> {
+  const company = await loadCompany(companyId);
+  const todayStart = startOfDayInZone(new Date(), company.timezone);
+  const dayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
+  const dayEnd = todayStart;
+
+  const tally = await evaluateCompanyDay(company, dayStart, dayEnd);
+  logger.info({ companyId, day: dayStart.toISOString().slice(0, 10), ...tally }, "idle tracking: manual run done");
+  return tally;
+}
+
+async function evaluateCompanyDay(company: CompanyWithEmployees, dayStart: Date, dayEnd: Date): Promise<IdleTrackingTally> {
+  const jiraCreds =
+    company.jiraBaseUrl && company.jiraEmail && company.jiraApiToken
+      ? { baseUrl: company.jiraBaseUrl, email: company.jiraEmail, apiToken: decryptSecret(company.jiraApiToken) }
+      : null;
+  const githubToken = company.githubToken ? decryptSecret(company.githubToken) : null;
+
+  const tally = emptyTally();
+
+  for (const employee of company.employees) {
+    try {
+      const result = await evaluateEmployeeDay(employee, { jiraCreds, githubToken, dayStart, dayEnd });
+      tally[result]++;
+    } catch (err) {
+      logger.error({ err, employeeId: employee.id, companyId: company.id }, "idle tracking failed for employee");
     }
   }
+
+  return tally;
 }
 
 async function evaluateEmployeeDay(
@@ -57,14 +93,14 @@ async function evaluateEmployeeDay(
     dayStart: Date;
     dayEnd: Date;
   }
-): Promise<void> {
+): Promise<EvalResult> {
   const existing = await prisma.idlePeriod.findUnique({
     where: { employeeId_date: { employeeId: employee.id, date: ctx.dayStart } },
   });
-  if (existing) return;
+  if (existing) return "already_recorded";
 
   const directions = employee.directions.map((d) => d.direction);
-  if (directions.length === 0) return; // not assigned anywhere — nothing meaningful to evaluate
+  if (directions.length === 0) return "no_directions"; // not assigned anywhere — nothing meaningful to evaluate
 
   let accountId = employee.jiraAccountId;
   let hadActivity = false;
@@ -92,7 +128,7 @@ async function evaluateEmployeeDay(
     }
   }
 
-  if (hadActivity) return;
+  if (hadActivity) return "had_activity";
 
   let hasBacklog = false;
   if (ctx.jiraCreds && accountId) {
@@ -117,4 +153,6 @@ async function evaluateEmployeeDay(
         : "В беклоге сотрудника не было доступных задач.",
     },
   });
+
+  return "recorded";
 }

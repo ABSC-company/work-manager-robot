@@ -15,6 +15,7 @@ import { mapIdentityConversation } from "./conversations/mapIdentity";
 import { reportCustomConversation } from "./conversations/reportCustom";
 import { listEmployees } from "./conversations/listEmployees";
 import { generateCompanyReport } from "../reports/service";
+import { runIdleTrackingNow } from "../scheduler/idleScheduler";
 import { sendReportForApproval, registerApproval } from "../reports/dispatch";
 import { InlineKeyboard } from "grammy";
 import {
@@ -92,6 +93,7 @@ bot.command("help", async (ctx) => {
       "/addoccasion — добавить мероприятие/напоминание",
       "/report <daily|weekly|monthly> — сгенерировать отчёт сейчас (weekly — последние 7 дней, monthly — последние 30 дней)",
       "/reportcustom — сгенерировать отчёт за произвольный период (спросит даты ДД.ММ.ГГГГ)",
+      "/checkidle — проверить простои сотрудников за вчерашний день прямо сейчас, не дожидаясь автоматического ночного прогона",
       "",
       "Просмотр:",
       "/listcompanies — список компаний",
@@ -244,6 +246,23 @@ bot.command("report", requireCompanyAdmin, async (ctx) => {
 });
 
 bot.command("reportcustom", requireCompanyAdmin, async (ctx) => ctx.conversation.enter("reportCustom"));
+
+bot.command("checkidle", requireCompanyAdmin, async (ctx) => {
+  await ctx.reply("Проверяю простои сотрудников за вчерашний день (по времени компании)...");
+  try {
+    const tally = await runIdleTrackingNow(ctx.session.activeCompanyId!);
+    await ctx.reply(
+      "Готово:\n" +
+        `— записано новых простоев: ${tally.recorded}\n` +
+        `— была активность (простой не зафиксирован): ${tally.had_activity}\n` +
+        `— уже было записано ранее: ${tally.already_recorded}\n` +
+        `— не привязаны ни к одному направлению (пропущены): ${tally.no_directions}`
+    );
+  } catch (err) {
+    logger.error({ err }, "manual idle tracking check failed");
+    await ctx.reply("Не удалось выполнить проверку. Подробности в логах сервиса.");
+  }
+});
 
 bot.callbackQuery(/^report_approve:(.+)$/, async (ctx) => {
   const reportId = ctx.match[1];
