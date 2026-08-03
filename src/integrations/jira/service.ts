@@ -32,15 +32,15 @@ export async function fetchIssuesForPeriod(
   )}" ORDER BY updated ASC`;
 
   const issues: JiraIssueSummary[] = [];
-  let startAt = 0;
+  let nextPageToken: string | undefined;
   const maxResults = 100;
 
   for (;;) {
-    const page = await client.issueSearch.searchForIssuesUsingJql({
+    const page = await client.issueSearch.searchForIssuesUsingJqlEnhancedSearchPost({
       jql,
-      startAt,
+      nextPageToken,
       maxResults,
-      expand: ["changelog"],
+      expand: "changelog",
       fields: ["summary", "assignee", "status", "statuscategory", "created", "updated"],
     });
 
@@ -73,10 +73,10 @@ export async function fetchIssuesForPeriod(
       });
     }
 
-    startAt += maxResults;
-    if (!page.issues || page.issues.length < maxResults || startAt >= (page.total ?? 0)) {
+    if (!page.nextPageToken || !page.issues || page.issues.length === 0) {
       break;
     }
+    nextPageToken = page.nextPageToken;
   }
 
   return issues;
@@ -91,7 +91,7 @@ export async function fetchAssigneeBacklog(
   const jql = `project = "${opts.projectKey}" AND assignee = "${opts.assigneeAccountId}" AND statusCategory != Done ORDER BY updated DESC`;
 
   try {
-    const page = await client.issueSearch.searchForIssuesUsingJql({
+    const page = await client.issueSearch.searchForIssuesUsingJqlEnhancedSearchPost({
       jql,
       maxResults: 50,
       fields: ["summary", "status"],
