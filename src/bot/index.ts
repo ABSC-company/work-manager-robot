@@ -16,6 +16,17 @@ import { listEmployees } from "./conversations/listEmployees";
 import { generateCompanyReport } from "../reports/service";
 import { sendReportForApproval, registerApproval } from "../reports/dispatch";
 import { InlineKeyboard } from "grammy";
+import {
+  listCompanies,
+  listProjects,
+  listDirections,
+  deleteProject,
+  deleteDirection,
+  deleteEmployee,
+  deleteAdmin,
+  deleteOccasion,
+  deleteCompany,
+} from "./commands/manage";
 
 bot.use(createConversation(newCompanyConversation, "newCompany"));
 bot.use(createConversation(addAdminConversation, "addAdmin"));
@@ -65,6 +76,19 @@ bot.command("help", async (ctx) => {
       "/setgroupchat — привязать текущий чат как групповой (для пересылки отчётов/напоминаний)",
       "/addoccasion — добавить мероприятие/напоминание",
       "/report <daily|weekly|monthly> — сгенерировать отчёт сейчас",
+      "",
+      "Просмотр:",
+      "/listcompanies — список компаний",
+      "/listprojects — список проектов активной компании",
+      "/listdirections — список направлений активной компании",
+      "",
+      "Удаление:",
+      "/deleteproject <id> — удалить проект (и его направления/отчёты)",
+      "/deletedirection <id> — удалить направление",
+      "/deleteemployee <id> — удалить сотрудника",
+      "/deleteadmin <telegram id> — удалить администратора компании (кроме последнего)",
+      "/deleteoccasion <id> — удалить мероприятие",
+      "/deletecompany <id> — удалить компанию целиком (только супер-администратор, требует подтверждения)",
     ].join("\n")
   );
 });
@@ -102,6 +126,71 @@ bot.command("setapprovals", requireCompanyAdmin, async (ctx) => ctx.conversation
 bot.command("addoccasion", requireCompanyAdmin, async (ctx) => ctx.conversation.enter("addOccasion"));
 bot.command("mapidentity", requireCompanyAdmin, async (ctx) => ctx.conversation.enter("mapIdentity"));
 bot.command("listemployees", requireCompanyAdmin, async (ctx) => listEmployees(ctx));
+
+bot.command("listcompanies", async (ctx) => {
+  const id = String(ctx.from?.id ?? "");
+  if (!isSuperAdmin(id) && !(await prisma.companyAdmin.findFirst({ where: { telegramId: id } }))) {
+    await ctx.reply("Вы не являетесь администратором ни одной компании.");
+    return;
+  }
+  await listCompanies(ctx);
+});
+bot.command("listprojects", requireCompanyAdmin, async (ctx) => listProjects(ctx));
+bot.command("listdirections", requireCompanyAdmin, async (ctx) => listDirections(ctx));
+
+bot.command("deleteproject", requireCompanyAdmin, async (ctx) => {
+  const projectId = ctx.match?.toString().trim();
+  if (!projectId) {
+    await ctx.reply("Использование: /deleteproject <id>");
+    return;
+  }
+  await deleteProject(ctx, projectId);
+});
+
+bot.command("deletedirection", requireCompanyAdmin, async (ctx) => {
+  const directionId = ctx.match?.toString().trim();
+  if (!directionId) {
+    await ctx.reply("Использование: /deletedirection <id>");
+    return;
+  }
+  await deleteDirection(ctx, directionId);
+});
+
+bot.command("deleteemployee", requireCompanyAdmin, async (ctx) => {
+  const employeeId = ctx.match?.toString().trim();
+  if (!employeeId) {
+    await ctx.reply("Использование: /deleteemployee <id>");
+    return;
+  }
+  await deleteEmployee(ctx, employeeId);
+});
+
+bot.command("deleteadmin", requireCompanyAdmin, async (ctx) => {
+  const telegramId = ctx.match?.toString().trim();
+  if (!telegramId || !/^\d+$/.test(telegramId)) {
+    await ctx.reply("Использование: /deleteadmin <telegram id>");
+    return;
+  }
+  await deleteAdmin(ctx, telegramId);
+});
+
+bot.command("deleteoccasion", requireCompanyAdmin, async (ctx) => {
+  const occasionId = ctx.match?.toString().trim();
+  if (!occasionId) {
+    await ctx.reply("Использование: /deleteoccasion <id>");
+    return;
+  }
+  await deleteOccasion(ctx, occasionId);
+});
+
+bot.command("deletecompany", requireSuperAdmin, async (ctx) => {
+  const [companyId, ...rest] = (ctx.match?.toString().trim() ?? "").split(/\s+/).filter(Boolean);
+  if (!companyId) {
+    await ctx.reply("Использование: /deletecompany <id>");
+    return;
+  }
+  await deleteCompany(ctx, companyId, rest.length > 0 ? rest.join(" ") : undefined);
+});
 
 bot.command("setgroupchat", requireCompanyAdmin, async (ctx) => {
   if (ctx.chat.type === "private") {

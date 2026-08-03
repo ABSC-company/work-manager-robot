@@ -1,6 +1,7 @@
 import type { Conversation } from "@grammyjs/conversations";
 import type { MyContext } from "../instance";
 import { prisma } from "../../db/prisma";
+import { isUniqueConstraintError } from "../../utils/prismaErrors";
 
 export async function addProjectConversation(conversation: Conversation<MyContext, MyContext>, ctx: MyContext): Promise<void> {
   const companyId = (await conversation.external((ctx) => ctx.session.activeCompanyId))!;
@@ -9,9 +10,16 @@ export async function addProjectConversation(conversation: Conversation<MyContex
   const nameMsg = await conversation.waitFor("message:text");
   const name = nameMsg.message.text.trim();
 
-  const project = await conversation.external(() => prisma.project.create({ data: { companyId, name } }));
-
-  await ctx.reply(`Проект "${project.name}" создан (id: ${project.id}). Добавьте направления через /adddirection.`);
+  try {
+    const project = await conversation.external(() => prisma.project.create({ data: { companyId, name } }));
+    await ctx.reply(`Проект "${project.name}" создан (id: ${project.id}). Добавьте направления через /adddirection.`);
+  } catch (err) {
+    if (isUniqueConstraintError(err)) {
+      await ctx.reply(`Проект с названием "${name}" уже существует в этой компании. Отменено.`);
+      return;
+    }
+    throw err;
+  }
 }
 
 export async function addDirectionConversation(conversation: Conversation<MyContext, MyContext>, ctx: MyContext): Promise<void> {
@@ -38,12 +46,19 @@ export async function addDirectionConversation(conversation: Conversation<MyCont
   const nameMsg = await conversation.waitFor("message:text");
   const name = nameMsg.message.text.trim();
 
-  const direction = await conversation.external(() =>
-    prisma.direction.create({ data: { projectId: project.id, name } })
-  );
-
-  await ctx.reply(
-    `Направление "${direction.name}" создано в проекте "${project.name}" (id: ${direction.id}).\n` +
-      `Настройте его через /linkdirection.`
-  );
+  try {
+    const direction = await conversation.external(() =>
+      prisma.direction.create({ data: { projectId: project.id, name } })
+    );
+    await ctx.reply(
+      `Направление "${direction.name}" создано в проекте "${project.name}" (id: ${direction.id}).\n` +
+        `Настройте его через /linkdirection.`
+    );
+  } catch (err) {
+    if (isUniqueConstraintError(err)) {
+      await ctx.reply(`Направление с названием "${name}" уже существует в этом проекте. Отменено.`);
+      return;
+    }
+    throw err;
+  }
 }

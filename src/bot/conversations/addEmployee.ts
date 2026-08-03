@@ -1,6 +1,7 @@
 import type { Conversation } from "@grammyjs/conversations";
 import type { MyContext } from "../instance";
 import { prisma } from "../../db/prisma";
+import { isUniqueConstraintError } from "../../utils/prismaErrors";
 
 export async function addEmployeeConversation(conversation: Conversation<MyContext, MyContext>, ctx: MyContext): Promise<void> {
   const companyId = (await conversation.external((ctx) => ctx.session.activeCompanyId))!;
@@ -26,16 +27,24 @@ export async function addEmployeeConversation(conversation: Conversation<MyConte
   const ghMsg = await conversation.waitFor("message:text");
   const githubUsername = normalizeOptional(ghMsg.message.text);
 
-  const employee = await conversation.external(() =>
-    prisma.employee.create({
-      data: { companyId, telegramUsername, fullName, department, position, githubUsername },
-    })
-  );
+  try {
+    const employee = await conversation.external(() =>
+      prisma.employee.create({
+        data: { companyId, telegramUsername, fullName, department, position, githubUsername },
+      })
+    );
 
-  await ctx.reply(
-    `Сотрудник "${employee.fullName}" добавлен (id: ${employee.id}).\n` +
-      `Привяжите его к направлению через /linkdirection.`
-  );
+    await ctx.reply(
+      `Сотрудник "${employee.fullName}" добавлен (id: ${employee.id}).\n` +
+        `Привяжите его к направлению через /linkdirection.`
+    );
+  } catch (err) {
+    if (isUniqueConstraintError(err)) {
+      await ctx.reply(`Сотрудник с username "@${telegramUsername}" уже есть в этой компании. Отменено.`);
+      return;
+    }
+    throw err;
+  }
 }
 
 function normalizeOptional(text: string): string | null {
