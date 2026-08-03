@@ -41,7 +41,7 @@ export async function addOccasionConversation(conversation: Conversation<MyConte
     await ctx.reply(
       "Частота повторения:\n" +
         "1 — каждый день\n" +
-        "2 — каждую неделю в определённый день (0=Вс..6=Сб)\n" +
+        "2 — каждую неделю в один или несколько дней (0=Вс..6=Сб)\n" +
         "3 — каждый месяц в определённый день (1-31)\n" +
         "4 — каждый месяц за N дней до конца месяца\n" +
         "Введите номер:"
@@ -50,15 +50,23 @@ export async function addOccasionConversation(conversation: Conversation<MyConte
     const freqChoice = freqMsg.message.text.trim();
 
     let frequency: RecurrenceFrequency = "DAILY";
-    let dayOfWeek: number | undefined;
+    let daysOfWeek: number[] = [];
     let dayOfMonth: number | undefined;
     let daysBeforeMonthEnd: number | undefined;
 
     if (freqChoice === "2") {
       frequency = "WEEKLY";
-      await ctx.reply("Введите день недели (0=Вс..6=Сб):");
+      await ctx.reply("Введите день(и) недели через запятую, если несколько (0=Вс..6=Сб), например 1,3,5:");
       const m = await waitFor(conversation, ctx, "message:text");
-      dayOfWeek = Number(m.message.text.trim());
+      daysOfWeek = m.message.text
+        .trim()
+        .split(",")
+        .map((s) => Number(s.trim()))
+        .filter((n) => Number.isInteger(n) && n >= 0 && n <= 6);
+      if (daysOfWeek.length === 0) {
+        await ctx.reply("Не указано ни одного корректного дня недели. Отменено.");
+        return;
+      }
     } else if (freqChoice === "3") {
       frequency = "MONTHLY_DAY";
       await ctx.reply("Введите день месяца (1-31):");
@@ -79,7 +87,7 @@ export async function addOccasionConversation(conversation: Conversation<MyConte
           description,
           type: "RECURRING",
           frequency,
-          dayOfWeek,
+          daysOfWeek,
           dayOfMonth,
           daysBeforeMonthEnd,
           hour,

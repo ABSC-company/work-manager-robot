@@ -206,7 +206,7 @@ model Occasion {
   type               OccasionType
   scheduledAt        DateTime? // for ONE_TIME
   frequency          RecurrenceFrequency?
-  dayOfWeek          Int? // for WEEKLY
+  daysOfWeek         Int[]                @default([]) // for WEEKLY, one or more (0=Sun..6=Sat)
   dayOfMonth         Int? // for MONTHLY_DAY
   daysBeforeMonthEnd Int? // for MONTHLY_BEFORE_END
   hour               Int                  @default(9)

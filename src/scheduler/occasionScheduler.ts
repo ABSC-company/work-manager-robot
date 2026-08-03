@@ -26,7 +26,7 @@ export async function checkOccasions(now: Date): Promise<void> {
           due = true;
           break;
         case "WEEKLY":
-          due = parts.weekday === occasion.dayOfWeek;
+          due = occasion.daysOfWeek.includes(parts.weekday);
           break;
         case "MONTHLY_DAY":
           due = parts.day === occasion.dayOfMonth;
