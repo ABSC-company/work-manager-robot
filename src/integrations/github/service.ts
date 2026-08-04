@@ -8,6 +8,7 @@ export interface CommitSummary {
   author: string | null;
   date: Date;
   url: string;
+  prNumber?: number; // set when this commit was sourced from a specific PR's own commit list
 }
 
 /** Fetches commits in [owner/repo] authored within [start, end], optionally filtered by github username. */
@@ -117,6 +118,40 @@ export async function fetchPullRequestsForPeriod(
   }
 
   return pullRequests;
+}
+
+/** Fetches a PR's own original commits (via the PR Commits API), with correct per-author attribution.
+ * Unlike the default branch's commit list, this survives squash-merge + branch deletion — GitHub keeps
+ * the PR's original commit list available even after the branch that held them is gone. This is what
+ * lets us (a) attribute a co-author's individual commits inside someone else's PR, and (b) find the
+ * commits behind a squashed merge, which collapses into a single commit on the default branch. */
+export async function fetchPullRequestCommits(
+  token: string,
+  opts: { repo: string; number: number }
+): Promise<CommitSummary[]> {
+  const [owner, repoName] = opts.repo.split("/");
+  if (!owner || !repoName) return [];
+
+  const octokit = createGithubClient(token);
+  try {
+    const commits = await octokit.paginate(octokit.rest.pulls.listCommits, {
+      owner,
+      repo: repoName,
+      pull_number: opts.number,
+      per_page: 100,
+    });
+    return commits.map((c) => ({
+      sha: c.sha,
+      message: c.commit.message,
+      author: c.author?.login ?? c.commit.author?.name ?? null,
+      date: new Date(c.commit.author?.date ?? c.commit.committer?.date ?? Date.now()),
+      url: c.html_url,
+      prNumber: opts.number,
+    }));
+  } catch (err) {
+    logger.warn({ err, repo: opts.repo, pr: opts.number }, "failed to fetch pull request commits");
+    return [];
+  }
 }
 
 export interface PullRequestReviewSummary {

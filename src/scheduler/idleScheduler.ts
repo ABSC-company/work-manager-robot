@@ -79,21 +79,23 @@ async function evaluateCompanyDay(company: CompanyWithEmployees, dayStart: Date,
   return tally;
 }
 
-async function evaluateEmployeeDay(
-  employee: {
-    id: string;
-    fullName: string;
-    jiraAccountId: string | null;
-    githubUsername: string | null;
-    directions: { direction: { jiraProjectKey: string | null; githubRepos: string[] } }[];
-  },
-  ctx: {
-    jiraCreds: { baseUrl: string; email: string; apiToken: string } | null;
-    githubToken: string | null;
-    dayStart: Date;
-    dayEnd: Date;
-  }
-): Promise<EvalResult> {
+export type IdleEmployeeInput = {
+  id: string;
+  fullName: string;
+  jiraAccountId: string | null;
+  githubUsername: string | null;
+  directions: { direction: { jiraProjectKey: string | null; githubRepos: string[] } }[];
+};
+export type IdleEvaluationContext = {
+  jiraCreds: { baseUrl: string; email: string; apiToken: string } | null;
+  githubToken: string | null;
+  dayStart: Date;
+  dayEnd: Date;
+};
+
+/** Evaluates a single employee's single calendar day and, if idle, persists an IdlePeriod row.
+ * Exported so report generation can backfill missing historical days on demand (see reports/generator.ts). */
+export async function evaluateEmployeeDay(employee: IdleEmployeeInput, ctx: IdleEvaluationContext): Promise<EvalResult> {
   const existing = await prisma.idlePeriod.findUnique({
     where: { employeeId_date: { employeeId: employee.id, date: ctx.dayStart } },
   });

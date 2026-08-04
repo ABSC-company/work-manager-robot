@@ -52,6 +52,11 @@ export function drawTable<T>(
       ...cellTexts.map((text, i) => doc.heightOfString(text, { width: columns[i].width - CELL_PADDING_X * 2 }) + CELL_PADDING_Y * 2)
     );
 
+    // pdfkit's internal doc.y drifts away from our tracked `y` after explicit-position multi-line
+    // text() calls (it lands wherever the last-drawn cell's text ended, not the row's true bottom).
+    // Re-sync before asking the page-break check, otherwise it makes the decision on stale/wrong
+    // coordinates — which is what caused rows to break early and leave large blank gaps on the page.
+    doc.y = y;
     const startedNewPage = opts.ensureSpace(rowHeight + HEADER_HEIGHT);
     if (startedNewPage) {
       y = doc.y;

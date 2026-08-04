@@ -19,6 +19,27 @@ export function findDoneTimestamp(issue: JiraIssueSummary): Date | null {
   return last ? last.at : issue.updated;
 }
 
+// Statuses that mark actual work starting, as opposed to sitting in the backlog. "Task duration" is
+// measured from here, not from creation, so backlog wait time never inflates it.
+const WORK_START_STATUS_PATTERNS = [/in[\s-]*progress/i, /prototype/i, /в\s*работ/i, /в\s*процесс/i];
+
+/** Finds when an issue first moved into a "work started" status (In Progress / Prototype / etc.), if ever. */
+export function findWorkStartTimestamp(issue: JiraIssueSummary): Date | null {
+  const transition = issue.statusHistory.find((t) => WORK_START_STATUS_PATTERNS.some((re) => re.test(t.to)));
+  return transition ? transition.at : null;
+}
+
+/** Time actually spent working an issue: from the "work started" transition to completion. Null if either
+ * boundary is unknown — a task that skipped straight to "done" without an observed in-progress transition
+ * has no measurable work duration, and must NOT fall back to created→done (that would reintroduce backlog wait). */
+export function computeWorkDurationHours(issue: JiraIssueSummary): number | null {
+  const start = findWorkStartTimestamp(issue);
+  const done = findDoneTimestamp(issue);
+  if (!start || !done) return null;
+  const hours = (done.getTime() - start.getTime()) / (1000 * 60 * 60);
+  return hours >= 0 ? hours : null;
+}
+
 export function computeEmployeeMetrics(
   issues: JiraIssueSummary[],
   backlogIssues: JiraIssueSummary[]
@@ -31,13 +52,7 @@ export function computeEmployeeMetrics(
   const completed = issues.filter((i) => i.statusCategory === "done");
   const completionPercent = issues.length > 0 ? (completed.length / issues.length) * 100 : 0;
 
-  const durations = completed
-    .map((issue) => {
-      const done = findDoneTimestamp(issue);
-      if (!done) return null;
-      return (done.getTime() - issue.created.getTime()) / (1000 * 60 * 60);
-    })
-    .filter((v): v is number => v !== null && v >= 0);
+  const durations = completed.map(computeWorkDurationHours).filter((v): v is number => v !== null);
 
   const avgTaskDurationHours = durations.length > 0 ? average(durations) : null;
 

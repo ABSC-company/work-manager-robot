@@ -1,13 +1,21 @@
 import { prisma } from "../db/prisma";
 import { decryptSecret } from "../utils/crypto";
+import { startOfDayInZone } from "../utils/time";
 import { fetchIssuesForPeriod, fetchAssigneeBacklog, resolveAccountIdByName } from "../integrations/jira/service";
 import type { JiraIssueSummary } from "../integrations/jira/service";
-import { fetchCommitsForPeriod, fetchPullRequestsForPeriod, fetchPullRequestReviews } from "../integrations/github/service";
+import {
+  fetchCommitsForPeriod,
+  fetchPullRequestsForPeriod,
+  fetchPullRequestReviews,
+  fetchPullRequestCommits,
+} from "../integrations/github/service";
 import type { CommitSummary, PullRequestSummary, PullRequestReviewSummary } from "../integrations/github/service";
 import { extractDocumentationText } from "../integrations/ai/documentation";
 import { analyzeEmployeeActivity } from "../integrations/ai/analyzer";
 import { matchCommitsToIssues, findUnmatchedPullRequests } from "../integrations/ai/match";
-import { computeEmployeeMetrics, aggregateMetrics, findDoneTimestamp } from "./metrics";
+import { computeEmployeeMetrics, aggregateMetrics, computeWorkDurationHours } from "./metrics";
+import { evaluateEmployeeDay } from "../scheduler/idleScheduler";
+import type { IdleEvaluationContext } from "../scheduler/idleScheduler";
 import type { CompanyReportData, DirectionReportBlock, ProjectReportBlock, EmployeeReportBlock, IdleSummary } from "./types";
 import type { ReportPeriod } from "@prisma/client";
 
@@ -64,6 +72,7 @@ export async function buildCompanyReportData(opts: {
       let commits: CommitSummary[] = [];
       let pullRequests: PullRequestSummary[] = [];
       let reviews: PullRequestReviewSummary[] = [];
+      let prOriginalCommits: CommitSummary[] = [];
       if (githubToken && direction.githubRepos.length > 0) {
         const perRepo = await Promise.all(
           direction.githubRepos.map(async (repo) => {
@@ -77,12 +86,20 @@ export async function buildCompanyReportData(opts: {
               start: opts.periodStart,
               end: opts.periodEnd,
             });
-            return { commits: repoCommits, pullRequests: repoPrs, reviews: repoReviews };
+            // Original per-PR commits — survive squash-merge + branch deletion, unlike the default
+            // branch's commit list (which only ever shows the single squashed commit). This is what
+            // lets us attribute a co-author's individual commits inside someone else's PR, and find
+            // the real commits behind a squash.
+            const repoPrCommits = (
+              await Promise.all(repoPrs.map((pr) => fetchPullRequestCommits(githubToken, { repo, number: pr.number })))
+            ).flat();
+            return { commits: repoCommits, pullRequests: repoPrs, reviews: repoReviews, prCommits: repoPrCommits };
           })
         );
         commits = perRepo.flatMap((r) => r.commits);
         pullRequests = perRepo.flatMap((r) => r.pullRequests);
         reviews = perRepo.flatMap((r) => r.reviews);
+        prOriginalCommits = perRepo.flatMap((r) => r.prCommits);
       }
 
       const documentationText = await extractDocumentationText(direction.documentation, githubToken);
@@ -110,18 +127,30 @@ export async function buildCompanyReportData(opts: {
             : [];
 
         const ghUsername = employee.githubUsername?.toLowerCase() ?? null;
-        const employeeCommits = ghUsername ? commits.filter((c) => c.author?.toLowerCase() === ghUsername) : [];
+        // Commits authored by this employee — from the default branch (works when squash isn't used)
+        // PLUS from any PR's own commit list, regardless of who opened that PR (co-author case).
+        const branchCommits = ghUsername ? commits.filter((c) => c.author?.toLowerCase() === ghUsername) : [];
+        const prCommitsByEmployee = ghUsername ? prOriginalCommits.filter((c) => c.author?.toLowerCase() === ghUsername) : [];
+        const employeeCommits = dedupeBySha([...branchCommits, ...prCommitsByEmployee]);
+
         const authoredPrs = ghUsername ? pullRequests.filter((pr) => pr.authorLogin?.toLowerCase() === ghUsername) : [];
         const reviewsGiven = ghUsername ? reviews.filter((r) => r.reviewerLogin?.toLowerCase() === ghUsername) : [];
         const pullRequestsMerged = ghUsername ? pullRequests.filter((pr) => pr.mergedByLogin?.toLowerCase() === ghUsername) : [];
 
         const issuesWithCommits = matchCommitsToIssues(employeeIssues, employeeCommits, pullRequests);
-        const matchedCommitUrls = new Set(issuesWithCommits.flatMap((i) => i.commits.map((c) => c.url)));
-        const unmatchedCommits = employeeCommits.filter((c) => !matchedCommitUrls.has(c.url));
+        const matchedCommitShas = new Set(issuesWithCommits.flatMap((i) => i.commits.map((c) => c.sha)));
+        const unmatchedCommits = employeeCommits.filter((c) => !matchedCommitShas.has(c.sha));
         const unmatchedPullRequests = findUnmatchedPullRequests(employeeIssues, authoredPrs);
 
         const metrics = computeEmployeeMetrics(employeeIssues, backlog);
-        const idleSummary = await computeIdleSummary(employee.id, opts.periodStart, opts.periodEnd);
+        const idleSummary = await computeIdleSummary(
+          employee,
+          jiraCreds,
+          githubToken,
+          company.timezone,
+          opts.periodStart,
+          opts.periodEnd
+        );
 
         const analysis = await analyzeEmployeeActivity({
           employeeName: employee.fullName,
@@ -162,7 +191,7 @@ export async function buildCompanyReportData(opts: {
             summary: issue.summary,
             currentStatus: issue.currentStatus,
             statusHistory: issue.statusHistory,
-            durationHours: issueDurationHours(issue),
+            durationHours: computeWorkDurationHours(issue),
             commits: (commitsByIssueKey.get(issue.key) ?? []).map((c) => ({ message: c.message, date: c.date, url: c.url })),
             workDoneNote: noteByKey.get(issue.key)?.workDoneNote ?? null,
             followsDocumentation: noteByKey.get(issue.key)?.followsDocumentation ?? null,
@@ -195,17 +224,42 @@ export async function buildCompanyReportData(opts: {
   };
 }
 
-/** Time from issue creation to completion, in hours. Null if the issue isn't done (yet). */
-function issueDurationHours(issue: JiraIssueSummary): number | null {
-  const done = findDoneTimestamp(issue);
-  if (!done) return null;
-  const hours = (done.getTime() - issue.created.getTime()) / (1000 * 60 * 60);
-  return hours >= 0 ? hours : null;
+function dedupeBySha(commits: CommitSummary[]): CommitSummary[] {
+  return [...new Map(commits.map((c) => [c.sha, c])).values()];
 }
 
-async function computeIdleSummary(employeeId: string, periodStart: Date, periodEnd: Date): Promise<IdleSummary> {
+/** Idle days are computed and persisted by the daily scheduler (idleScheduler.ts), but a report may cover
+ * days that job hasn't run for yet (feature just enabled, server downtime, etc.). Backfill any missing
+ * completed day in the period on demand — same logic, same DB row — so the report is never silently missing
+ * idle data, and the computation is cached (persisted) for next time. */
+async function computeIdleSummary(
+  employee: { id: string; fullName: string; jiraAccountId: string | null; githubUsername: string | null },
+  jiraCreds: IdleEvaluationContext["jiraCreds"],
+  githubToken: string | null,
+  companyTimezone: string,
+  periodStart: Date,
+  periodEnd: Date
+): Promise<IdleSummary> {
+  const fullEmployee = await prisma.employee.findUniqueOrThrow({
+    where: { id: employee.id },
+    include: { directions: { include: { direction: true } } },
+  });
+
+  const todayStart = startOfDayInZone(new Date(), companyTimezone);
+  let day = startOfDayInZone(periodStart, companyTimezone);
+  while (day.getTime() < todayStart.getTime() && day.getTime() < periodEnd.getTime()) {
+    const dayEnd = new Date(day.getTime() + 24 * 60 * 60 * 1000);
+    const existing = await prisma.idlePeriod.findUnique({
+      where: { employeeId_date: { employeeId: employee.id, date: day } },
+    });
+    if (!existing) {
+      await evaluateEmployeeDay(fullEmployee, { jiraCreds, githubToken, dayStart: day, dayEnd });
+    }
+    day = new Date(day.getTime() + 24 * 60 * 60 * 1000);
+  }
+
   const rows = await prisma.idlePeriod.findMany({
-    where: { employeeId, date: { gte: periodStart, lte: periodEnd } },
+    where: { employeeId: employee.id, date: { gte: periodStart, lte: periodEnd } },
     orderBy: { date: "asc" },
   });
   return {
