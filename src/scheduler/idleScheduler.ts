@@ -3,7 +3,7 @@ import { logger } from "../utils/logger";
 import { getZonedParts, startOfDayInZone } from "../utils/time";
 import { decryptSecret } from "../utils/crypto";
 import { hasJiraActivity, fetchAssigneeBacklog, resolveAccountIdByName } from "../integrations/jira/service";
-import { fetchCommitsForPeriod } from "../integrations/github/service";
+import { hasGithubActivityInRepo } from "../integrations/github/activity";
 
 // Runs once per company per day, shortly after local midnight, evaluating the day that just ended.
 const IDLE_CHECK_HOUR = 0;
@@ -117,13 +117,13 @@ export async function evaluateEmployeeDay(employee: IdleEmployeeInput, ctx: Idle
   if (!hadActivity && ctx.githubToken && employee.githubUsername) {
     const repos = [...new Set(directions.flatMap((d) => d.githubRepos))];
     for (const repo of repos) {
-      const commits = await fetchCommitsForPeriod(ctx.githubToken, {
+      const active = await hasGithubActivityInRepo(ctx.githubToken, {
         repo,
+        username: employee.githubUsername,
         start: ctx.dayStart,
         end: ctx.dayEnd,
-        authorUsername: employee.githubUsername,
       });
-      if (commits.length > 0) {
+      if (active) {
         hadActivity = true;
         break;
       }
