@@ -8,8 +8,16 @@ import {
   fetchPullRequestsForPeriod,
   fetchPullRequestReviews,
   fetchPullRequestCommits,
+  fetchPullRequestDiffStats,
+  fetchPullRequestReviewComments,
 } from "../integrations/github/service";
-import type { CommitSummary, PullRequestSummary, PullRequestReviewSummary } from "../integrations/github/service";
+import type {
+  CommitSummary,
+  PullRequestSummary,
+  PullRequestReviewSummary,
+  PullRequestReviewCommentSummary,
+} from "../integrations/github/service";
+import { estimateGithubEffortHours } from "../integrations/github/effortEstimate";
 import { extractDocumentationText } from "../integrations/ai/documentation";
 import { analyzeEmployeeActivity } from "../integrations/ai/analyzer";
 import { matchCommitsToIssues, findUnmatchedPullRequests } from "../integrations/ai/match";
@@ -72,20 +80,22 @@ export async function buildCompanyReportData(opts: {
       let commits: CommitSummary[] = [];
       let pullRequests: PullRequestSummary[] = [];
       let reviews: PullRequestReviewSummary[] = [];
+      let reviewComments: PullRequestReviewCommentSummary[] = [];
       let prOriginalCommits: CommitSummary[] = [];
       if (githubToken && direction.githubRepos.length > 0) {
         const perRepo = await Promise.all(
           direction.githubRepos.map(async (repo) => {
-            const [repoCommits, repoPrs] = await Promise.all([
+            const [repoCommits, repoPrsRaw] = await Promise.all([
               fetchCommitsForPeriod(githubToken, { repo, start: opts.periodStart, end: opts.periodEnd }),
               fetchPullRequestsForPeriod(githubToken, { repo, start: opts.periodStart, end: opts.periodEnd }),
             ]);
-            const repoReviews = await fetchPullRequestReviews(githubToken, {
-              repo,
-              pullRequests: repoPrs,
-              start: opts.periodStart,
-              end: opts.periodEnd,
-            });
+            // Diff-size stats aren't in the list response — enrich once here so both the report body and
+            // the GitHub-effort-hours floor (effortEstimate.ts) can use them without refetching per employee.
+            const repoPrs = await fetchPullRequestDiffStats(githubToken, { repo, pullRequests: repoPrsRaw });
+            const [repoReviews, repoReviewComments] = await Promise.all([
+              fetchPullRequestReviews(githubToken, { repo, pullRequests: repoPrs, start: opts.periodStart, end: opts.periodEnd }),
+              fetchPullRequestReviewComments(githubToken, { repo, pullRequests: repoPrs, start: opts.periodStart, end: opts.periodEnd }),
+            ]);
             // Original per-PR commits — survive squash-merge + branch deletion, unlike the default
             // branch's commit list (which only ever shows the single squashed commit). This is what
             // lets us attribute a co-author's individual commits inside someone else's PR, and find
@@ -93,12 +103,19 @@ export async function buildCompanyReportData(opts: {
             const repoPrCommits = (
               await Promise.all(repoPrs.map((pr) => fetchPullRequestCommits(githubToken, { repo, number: pr.number })))
             ).flat();
-            return { commits: repoCommits, pullRequests: repoPrs, reviews: repoReviews, prCommits: repoPrCommits };
+            return {
+              commits: repoCommits,
+              pullRequests: repoPrs,
+              reviews: repoReviews,
+              reviewComments: repoReviewComments,
+              prCommits: repoPrCommits,
+            };
           })
         );
         commits = perRepo.flatMap((r) => r.commits);
         pullRequests = perRepo.flatMap((r) => r.pullRequests);
         reviews = perRepo.flatMap((r) => r.reviews);
+        reviewComments = perRepo.flatMap((r) => r.reviewComments);
         prOriginalCommits = perRepo.flatMap((r) => r.prCommits);
       }
 
@@ -136,6 +153,16 @@ export async function buildCompanyReportData(opts: {
         const authoredPrs = ghUsername ? pullRequests.filter((pr) => pr.authorLogin?.toLowerCase() === ghUsername) : [];
         const reviewsGiven = ghUsername ? reviews.filter((r) => r.reviewerLogin?.toLowerCase() === ghUsername) : [];
         const pullRequestsMerged = ghUsername ? pullRequests.filter((pr) => pr.mergedByLogin?.toLowerCase() === ghUsername) : [];
+        const employeeReviewComments = ghUsername
+          ? reviewComments.filter((c) => c.reviewerLogin?.toLowerCase() === ghUsername)
+          : [];
+        // Plain merge clicks — merging a PR the employee neither authored nor reviewed — so authoring/review
+        // effort below never double-counts a merge that's just the tail end of work already accounted for.
+        const reviewedPrNumbers = new Set(reviewsGiven.map((r) => r.prNumber));
+        const mergesWithoutOwnReview = pullRequestsMerged
+          .filter((pr) => pr.authorLogin?.toLowerCase() !== ghUsername && !reviewedPrNumbers.has(pr.number))
+          .map((pr) => pr.mergedAt)
+          .filter((d): d is Date => d !== null);
 
         const issuesWithCommits = matchCommitsToIssues(employeeIssues, employeeCommits, pullRequests);
         const matchedCommitShas = new Set(issuesWithCommits.flatMap((i) => i.commits.map((c) => c.sha)));
@@ -152,6 +179,21 @@ export async function buildCompanyReportData(opts: {
           opts.periodEnd
         );
 
+        // Deterministic floor under the AI's estimatedWorkedHours guess, computed from diff sizes and
+        // review-comment timestamps rather than commit messages alone — see effortEstimate.ts for why.
+        const githubEffort = estimateGithubEffortHours({
+          looseCommits: employeeCommits.filter((c) => c.prNumber === undefined).map((c) => ({ date: c.date })),
+          authoredPrDiffs: authoredPrs.map((pr) => ({
+            additions: pr.additions,
+            deletions: pr.deletions,
+            at: pr.mergedAt ?? pr.updatedAt,
+          })),
+          reviewComments: employeeReviewComments.map((c) => ({ prNumber: c.prNumber, createdAt: c.createdAt })),
+          reviewSubmissions: reviewsGiven.map((r) => ({ prNumber: r.prNumber, submittedAt: r.submittedAt })),
+          mergesWithoutOwnReview,
+          timezone: company.timezone,
+        });
+
         const analysis = await analyzeEmployeeActivity({
           employeeName: employee.fullName,
           periodLabel: formatPeriodLabel(opts.period, opts.periodStart, opts.periodEnd),
@@ -162,7 +204,21 @@ export async function buildCompanyReportData(opts: {
           reviewsGiven,
           idleSummary,
           documentationText,
+          githubEffortHours: {
+            total: githubEffort.totalHours,
+            commitHours: githubEffort.rawByKind.commitHours,
+            reviewHours: githubEffort.rawByKind.reviewHours,
+            mergeHours: githubEffort.rawByKind.mergeHours,
+          },
         });
+
+        // The AI may still add hours the GitHub signal can't see (pure-Jira work, discussions elsewhere),
+        // but it must never come in under the deterministic floor — that's the systematic underestimate
+        // this whole mechanism exists to close.
+        const estimatedWorkedHours =
+          analysis.estimatedWorkedHours != null || githubEffort.totalHours > 0
+            ? Math.min(periodHours, Math.max(analysis.estimatedWorkedHours ?? 0, githubEffort.totalHours))
+            : null;
 
         const noteByKey = new Map(analysis.perIssue.map((n) => [n.issueKey, n]));
         const commitsByIssueKey = new Map(issuesWithCommits.map((i) => [i.issue.key, i.commits]));
@@ -174,7 +230,7 @@ export async function buildCompanyReportData(opts: {
           metrics,
           aiSummary: analysis.summary,
           efficiencyAssessment: analysis.efficiencyAssessment,
-          estimatedWorkedHours: analysis.estimatedWorkedHours,
+          estimatedWorkedHours,
           periodHours,
           idleSummary,
           commits: employeeCommits.map((c) => ({ message: c.message, date: c.date, url: c.url })),

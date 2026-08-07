@@ -47,6 +47,11 @@ export async function analyzeEmployeeActivity(input: {
   reviewsGiven: PullRequestReviewSummary[]; // code reviews this employee submitted on others' PRs
   idleSummary: IdleSummaryInput;
   documentationText: string;
+  /** Deterministic floor computed from diff sizes and review-comment timestamps (see
+   * github/effortEstimate.ts) — NOT a suggestion, a lower bound: estimatedWorkedHours must never come
+   * back below githubEffortHours.total, since that number is backed by concrete GitHub evidence the AI
+   * itself doesn't have full visibility into (e.g. exact diff size, comment counts). */
+  githubEffortHours: { total: number; commitHours: number; reviewHours: number; mergeHours: number };
 }): Promise<EmployeeActivityAnalysis> {
   const hasAnyData =
     input.issues.length > 0 ||
@@ -109,6 +114,13 @@ ${JSON.stringify(
   2
 )}
 
+Детерминированная (не-ИИ) оценка часов по GitHub-активности, посчитанная по размеру диффов PR и
+количеству/времени review-комментариев (НЕ по одним лишь сообщениям коммитов): ~${Math.round(input.githubEffortHours.total)} ч
+(из них коммиты/PR: ~${Math.round(input.githubEffortHours.commitHours)} ч, ревью: ~${Math.round(input.githubEffortHours.reviewHours)} ч, merge-действия: ~${Math.round(input.githubEffortHours.mergeHours)} ч).
+Это НИЖНЯЯ ГРАНИЦА, подтверждённая конкретными данными GitHub (размер diff, число комментариев в ревью) —
+estimatedWorkedHours НЕ ДОЛЖЕН быть меньше этого числа. Можешь оценить больше, если Jira-задачи или прочий
+контекст показывают дополнительную работу, не видимую в GitHub.
+
 Ответь СТРОГО в формате JSON без markdown-обрамления:
 {
   "summary": "краткий абзац (3-5 предложений) на русском о том, что сотрудник делал в этот период: задачи, код-ревью чужих PR, прочая GitHub-активность",
@@ -142,7 +154,9 @@ followsDocumentation должен быть null, если документаци
     return {
       summary: `${input.employeeName}: за период обработано ${input.issues.length} задач(и), ${input.unmatchedCommits.length} коммит(ов) и ${input.reviewsGiven.length} ревью без AI-обработки. Автоматический AI-анализ временно недоступен.`,
       efficiencyAssessment: FALLBACK_EFFICIENCY,
-      estimatedWorkedHours: null,
+      // Fall back to the deterministic floor rather than null — an AI outage shouldn't zero out an
+      // estimate that concrete GitHub evidence (diff sizes, review comments) already supports.
+      estimatedWorkedHours: input.githubEffortHours.total > 0 ? input.githubEffortHours.total : null,
       perIssue: input.issues.map(({ issue }) => ({
         issueKey: issue.key,
         workDoneNote: "AI-анализ недоступен",

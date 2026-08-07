@@ -65,6 +65,11 @@ export interface PullRequestSummary {
   closedAt: Date | null;
   mergedByLogin: string | null;
   url: string;
+  // Diff-size signal, used to gauge authoring effort (see effortEstimate.ts) — null until enriched via
+  // fetchPullRequestDiffStats, since the list endpoint this comes from doesn't include it for free.
+  additions: number | null;
+  deletions: number | null;
+  changedFiles: number | null;
 }
 
 /** Fetches PRs in [owner/repo] touched (created/updated/merged/closed) within [start, end]. */
@@ -110,6 +115,9 @@ export async function fetchPullRequestsForPeriod(
           closedAt: pr.closed_at ? new Date(pr.closed_at) : null,
           mergedByLogin: (pr as { merged_by?: { login?: string } | null }).merged_by?.login ?? null,
           url: pr.html_url,
+          additions: null,
+          deletions: null,
+          changedFiles: null,
         });
       }
     }
@@ -118,6 +126,32 @@ export async function fetchPullRequestsForPeriod(
   }
 
   return pullRequests;
+}
+
+/** Enriches PRs with diff-size stats (`additions`/`deletions`/`changed_files`) that the list endpoint
+ * doesn't return — one extra call per PR via `pulls.get`, so call this only for the (already
+ * period-filtered) PRs whose size actually matters, e.g. those authored by the employee a report is
+ * about. Returns a new array; PRs that fail to enrich keep null stats rather than dropping out. */
+export async function fetchPullRequestDiffStats(
+  token: string,
+  opts: { repo: string; pullRequests: PullRequestSummary[] }
+): Promise<PullRequestSummary[]> {
+  const [owner, repoName] = opts.repo.split("/");
+  if (!owner || !repoName) return opts.pullRequests;
+
+  const octokit = createGithubClient(token);
+
+  return Promise.all(
+    opts.pullRequests.map(async (pr) => {
+      try {
+        const { data } = await octokit.rest.pulls.get({ owner, repo: repoName, pull_number: pr.number });
+        return { ...pr, additions: data.additions, deletions: data.deletions, changedFiles: data.changed_files };
+      } catch (err) {
+        logger.warn({ err, repo: opts.repo, pr: pr.number }, "failed to fetch pull request diff stats");
+        return pr;
+      }
+    })
+  );
 }
 
 /** Fetches a PR's own original commits (via the PR Commits API), with correct per-author attribution.
@@ -195,4 +229,52 @@ export async function fetchPullRequestReviews(
   }
 
   return reviews;
+}
+
+export interface PullRequestReviewCommentSummary {
+  prNumber: number;
+  reviewerLogin: string | null;
+  createdAt: Date;
+  bodyLength: number; // comment text length, not the text itself — a size signal for review depth, not content to store/quote
+  url: string;
+}
+
+/** Fetches inline review comments (the line-by-line kind, not the single top-level review verdict) within
+ * [start, end] for the given PRs. Unlike `fetchPullRequestReviews`'s `state`/`submittedAt`, this is what
+ * lets us tell a one-click "Approve" apart from a review that left 30 comments — see effortEstimate.ts. */
+export async function fetchPullRequestReviewComments(
+  token: string,
+  opts: { repo: string; pullRequests: PullRequestSummary[]; start: Date; end: Date }
+): Promise<PullRequestReviewCommentSummary[]> {
+  const [owner, repoName] = opts.repo.split("/");
+  if (!owner || !repoName) return [];
+
+  const octokit = createGithubClient(token);
+  const comments: PullRequestReviewCommentSummary[] = [];
+
+  for (const pr of opts.pullRequests) {
+    try {
+      const data = await octokit.paginate(octokit.rest.pulls.listReviewComments, {
+        owner,
+        repo: repoName,
+        pull_number: pr.number,
+        per_page: 100,
+      });
+      for (const comment of data) {
+        const createdAt = new Date(comment.created_at);
+        if (createdAt < opts.start || createdAt > opts.end) continue;
+        comments.push({
+          prNumber: pr.number,
+          reviewerLogin: comment.user?.login ?? null,
+          createdAt,
+          bodyLength: comment.body?.length ?? 0,
+          url: comment.html_url,
+        });
+      }
+    } catch (err) {
+      logger.warn({ err, repo: opts.repo, pr: pr.number }, "failed to fetch pull request review comments");
+    }
+  }
+
+  return comments;
 }
